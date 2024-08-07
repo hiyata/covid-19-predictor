@@ -13,9 +13,14 @@ jobs:
     - name: Checkout COVID-19 predictor repo
       uses: actions/checkout@v2
       with:
-        repository: hiyata/covid-19-predictor
+        repository: hiyata/covid-19-predictor  # or covid-19-prediction, whichever is correct
         path: covid-predictor
         token: ${{ secrets.PAT }}
+
+    - name: Debug - List contents of workspace
+      run: |
+        pwd
+        ls -R
 
     - name: Checkout hiyata.github.io repo
       uses: actions/checkout@v2
@@ -32,12 +37,22 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r covid-19-predictor/requirements.txt
+        if [ -f covid-predictor/requirements.txt ]; then
+          pip install -r covid-predictor/requirements.txt
+        else
+          echo "requirements.txt not found"
+          exit 1
+        fi
 
     - name: Run prediction script
       run: |
         cd covid-predictor
-        python -u covid_prediction.py
+        if [ -f covid_prediction.py ]; then
+          python -u covid_prediction.py
+        else
+          echo "covid_prediction.py not found"
+          exit 1
+        fi
         echo "Current directory contents:"
         ls -la
         cd ..
@@ -47,8 +62,8 @@ jobs:
     - name: Copy JSON file to github.io repo
       run: |
         mkdir -p hiyata.github.io/assets/covid-19-files
-        if [ -f covid-19-predictor/covid_predictions.json ]; then
-          cp covid-19-predictor/covid_predictions.json hiyata.github.io/assets/covid-19-files/
+        if [ -f covid-predictor/covid_predictions.json ]; then
+          cp covid-predictor/covid_predictions.json hiyata.github.io/assets/covid-19-files/
           echo "File copied successfully"
         else
           echo "covid_predictions.json not found"
