@@ -14,7 +14,7 @@ from sklearn.preprocessing import MinMaxScaler
 
 def fetch_and_clean_data():
     print("Fetching and cleaning data...")
-    url = "https://srhdpeuwpubsa.blob.core.windows.net/whdh/COVID/WHO-COVID-19-global-data.csv"
+    url = "https://covid19.who.int/WHO-COVID-19-global-data.csv"
     
     try:
         response = requests.get(url)
@@ -23,16 +23,7 @@ def fetch_and_clean_data():
         print(f"Error fetching data: {e}")
         sys.exit(1)
     
-    # Saving content to a temporary CSV file for debugging
-    with open('temp_who_data.csv', 'wb') as temp_file:
-        temp_file.write(response.content)
-    
-    # Read the CSV from the saved file
-    df = pd.read_csv('temp_who_data.csv')
-    
-    # Logging a few lines of the dataframe for debugging
-    print("Sample data from the CSV:")
-    print(df.head())
+    df = pd.read_csv(url)
     
     # Aggregate global daily cases
     df_global = df.groupby('Date_reported')['New_cases'].sum().reset_index()
@@ -93,27 +84,29 @@ def train_and_predict_hybrid(df, look_back=15):
     early_stopping = EarlyStopping(monitor='loss', patience=5)
     model.fit(X, y, epochs=50, batch_size=32, verbose=2, callbacks=[early_stopping])
     
-    # Prepare data for prediction
+    # Make predictions for known dates
+    known_predictions = model.predict(X)
+    known_predictions = scaler.inverse_transform(known_predictions).flatten()
+    known_predictions = np.expm1(known_predictions)
+    
+    # Prepare data for future predictions
     future_X = X[-1:]
     future_day_of_week = df['day_of_week'].values[-look_back:].reshape(-1, 1)
     
-    predictions = []
+    future_predictions = []
     for i in range(30):
         pred = model.predict(future_X)
-        predictions.append(pred[0, 0])
-        next_day_of_week = (future_day_of_week[-1] + 1) % 7  # Cycle through days of the week
+        future_predictions.append(pred[0, 0])
+        next_day_of_week = (future_day_of_week[-1] + 1) % 7
         pred_reshaped = np.hstack((pred.reshape(1, 1), next_day_of_week.reshape(1, 1)))
         future_X = np.concatenate((future_X[:, 1:, :], pred_reshaped.reshape(1, 1, 2)), axis=1)
         future_day_of_week = np.append(future_day_of_week[1:], next_day_of_week)
     
-    predictions = scaler.inverse_transform(np.array(predictions).reshape(-1, 1))
-    predictions = np.expm1(predictions)  # Inverse of log1p transformation
-    
-    # Prepare the full predicted values including the forecast
-    full_predicted = np.concatenate((df['y'].values[:-30], predictions.flatten()))
+    future_predictions = scaler.inverse_transform(np.array(future_predictions).reshape(-1, 1))
+    future_predictions = np.expm1(future_predictions).flatten()
     
     print("Hybrid model training and prediction complete.")
-    return full_predicted, predictions
+    return known_predictions, future_predictions
 
 def calculate_metrics(actual, predicted):
     mae = np.mean(np.abs(actual - predicted))
@@ -125,11 +118,11 @@ def main():
     try:
         print("Starting main function...")
         df = fetch_and_clean_data()
-        full_predicted, future_predictions = train_and_predict_hybrid(df)
+        known_predictions, future_predictions = train_and_predict_hybrid(df)
         
         # Separate actual and predicted data
         actual = df['y'].values
-        predicted = full_predicted[:len(actual)]  # Predictions for known dates
+        predicted = known_predictions[:len(actual)]  # Predictions for known dates
         
         print("Preparing data for JSON...")
         data = {
@@ -137,7 +130,7 @@ def main():
             'actual': actual.tolist(),
             'predicted': predicted.tolist(),
             'future_dates': [str(df['ds'].iloc[-1] + timedelta(days=i)) for i in range(1, 31)],
-            'future_predicted': future_predictions.flatten().tolist()
+            'future_predicted': future_predictions.tolist()
         }
         
         print("Calculating metrics...")
@@ -147,23 +140,20 @@ def main():
         data['rmse'] = float(rmse)
         data['mape'] = float(mape)
         data['last_updated'] = datetime.now().isoformat()
-                
+        
         print("Saving to JSON...")
         json_path = os.path.join(os.getcwd(), 'covid_predictions.json')
-        print(f"Attempting to save JSON file at: {json_path}")
-
         with open(json_path, 'w') as f:
             json.dump(data, f)
         
-        if os.path.exists(json_path):
-            print(f"JSON file saved successfully at: {json_path}")
-        else:
-            print("Failed to save JSON file.")
+        print(f"JSON file saved successfully at: {json_path}")
         
-        # Read back the file to ensure it was written correctly
-        with open(json_path, 'r') as f:
-            saved_data = json.load(f)
-            print(f"Read back JSON data: {saved_data}")
+        # Print some debug information
+        print(f"Number of actual data points: {len(data['actual'])}")
+        print(f"Number of predicted data points: {len(data['predicted'])}")
+        print(f"First few actual values: {data['actual'][:5]}")
+        print(f"First few predicted values: {data['predicted'][:5]}")
+        
     except Exception as e:
         print(f"An error occurred: {str(e)}")
         print("Traceback:")
