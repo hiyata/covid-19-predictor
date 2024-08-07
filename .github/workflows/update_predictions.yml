@@ -13,14 +13,9 @@ jobs:
     - name: Checkout COVID-19 predictor repo
       uses: actions/checkout@v2
       with:
-        repository: hiyata/covid-19-predictor  # or covid-19-prediction, whichever is correct
+        repository: hiyata/covid-19-predictor
         path: covid-predictor
         token: ${{ secrets.PAT }}
-
-    - name: Debug - List contents of workspace
-      run: |
-        pwd
-        ls -R
 
     - name: Checkout hiyata.github.io repo
       uses: actions/checkout@v2
@@ -37,22 +32,12 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        if [ -f covid-predictor/requirements.txt ]; then
-          pip install -r covid-predictor/requirements.txt
-        else
-          echo "requirements.txt not found"
-          exit 1
-        fi
+        pip install -r covid-predictor/requirements.txt
 
     - name: Run prediction script
       run: |
         cd covid-predictor
-        if [ -f covid_prediction.py ]; then
-          python -u covid_prediction.py
-        else
-          echo "covid_prediction.py not found"
-          exit 1
-        fi
+        python -u covid_prediction.py
         echo "Current directory contents:"
         ls -la
         cd ..
