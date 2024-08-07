@@ -109,8 +109,11 @@ def train_and_predict_hybrid(df, look_back=15):
     predictions = scaler.inverse_transform(np.array(predictions).reshape(-1, 1))
     predictions = np.expm1(predictions)  # Inverse of log1p transformation
     
+    # Prepare the full predicted values including the forecast
+    full_predicted = np.concatenate((df['y'].values[:-30], predictions.flatten()))
+    
     print("Hybrid model training and prediction complete.")
-    return predictions
+    return full_predicted, predictions
 
 def calculate_metrics(actual, predicted):
     mae = np.mean(np.abs(actual - predicted))
@@ -122,7 +125,7 @@ def main():
     try:
         print("Starting main function...")
         df = fetch_and_clean_data()
-        predictions = train_and_predict_hybrid(df)
+        full_predicted, future_predictions = train_and_predict_hybrid(df)
         
         # Use the most recent actual data for evaluation
         actual = df['y'].values[-30:]
@@ -131,11 +134,12 @@ def main():
         data = {
             'dates': df['ds'].astype(str).tolist() + [str(df['ds'].iloc[-1] + timedelta(days=i)) for i in range(1, 31)],
             'actual': df['y'].tolist() + [None] * 30,
-            'predicted': [None] * (len(df['y']) - 30) + predictions.flatten().tolist(),
+            'predicted': full_predicted.tolist(),
+            'future_predicted': future_predictions.flatten().tolist()
         }
         
         print("Calculating metrics...")
-        mae, rmse, mape = calculate_metrics(actual, predictions)
+        mae, rmse, mape = calculate_metrics(actual, future_predictions)
         
         data['mae'] = float(mae)
         data['rmse'] = float(rmse)
