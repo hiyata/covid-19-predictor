@@ -45,15 +45,15 @@ jobs:
         ls -la ..
         mkdir -p ../github-pages/assets/data
         if [ -f covid_predictions.json ]; then
-          cp covid_predictions.json ../github-pages/assets/data/
-          echo "File copied successfully"
+        cp covid_predictions.json ../github-pages/assets/data/
+        echo "File copied successfully"
         else
-          echo "covid_predictions.json not found"
-          exit 1
+        echo "covid_predictions.json not found"
+        exit 1
         fi
         echo "Contents of github-pages/assets/data directory:"
         ls -la ../github-pages/assets/data
-    
+
     - name: Commit and push to github.io repository
       run: |
         cd github-pages
