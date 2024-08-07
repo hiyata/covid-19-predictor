@@ -16,7 +16,7 @@ jobs:
     
     - uses: actions/checkout@v2
       with:
-        repository: hiyata/hiyata.github.io
+        repository: hiytat/hiyata.github.io
         path: github-pages
         token: ${{ secrets.PAT }}  # Personal Access Token with repo scope
     
@@ -30,14 +30,27 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r covid-data/requirements.txt
     
+    - name: Debug - Print Python script content
+      run: |
+        echo "Content of covid_prediction.py:"
+        cat covid-data/covid_prediction.py
+    
     - name: Run prediction script
       run: |
         cd covid-data
-        python covid_prediction.py
-        echo "Contents of covid-data directory:"
+        python -u covid_prediction.py
+        echo "Current directory contents:"
         ls -la
+        echo "Parent directory contents:"
+        ls -la ..
         mkdir -p ../github-pages/assets/data
-        mv covid_predictions.json ../github-pages/assets/data/ || echo "File not found, skipping move"
+        if [ -f covid_predictions.json ]; then
+          cp covid_predictions.json ../github-pages/assets/data/
+          echo "File copied successfully"
+        else
+          echo "covid_predictions.json not found"
+          exit 1
+        fi
         echo "Contents of github-pages/assets/data directory:"
         ls -la ../github-pages/assets/data
     
