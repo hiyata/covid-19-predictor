@@ -127,25 +127,27 @@ def main():
         df = fetch_and_clean_data()
         full_predicted, future_predictions = train_and_predict_hybrid(df)
         
-        # Use the most recent actual data for evaluation
-        actual = df['y'].values[-30:]
+        # Separate actual and predicted data
+        actual = df['y'].values
+        predicted = full_predicted[:len(actual)]  # Predictions for known dates
         
         print("Preparing data for JSON...")
         data = {
-            'dates': df['ds'].astype(str).tolist() + [str(df['ds'].iloc[-1] + timedelta(days=i)) for i in range(1, 31)],
-            'actual': df['y'].tolist() + [None] * 30,
-            'predicted': full_predicted.tolist(),
+            'dates': df['ds'].astype(str).tolist(),
+            'actual': actual.tolist(),
+            'predicted': predicted.tolist(),
+            'future_dates': [str(df['ds'].iloc[-1] + timedelta(days=i)) for i in range(1, 31)],
             'future_predicted': future_predictions.flatten().tolist()
         }
         
         print("Calculating metrics...")
-        mae, rmse, mape = calculate_metrics(actual, future_predictions)
+        mae, rmse, mape = calculate_metrics(actual[-30:], predicted[-30:])  # Use last 30 days for metrics
         
         data['mae'] = float(mae)
         data['rmse'] = float(rmse)
         data['mape'] = float(mape)
         data['last_updated'] = datetime.now().isoformat()
-        
+                
         print("Saving to JSON...")
         json_path = os.path.join(os.getcwd(), 'covid_predictions.json')
         print(f"Attempting to save JSON file at: {json_path}")
