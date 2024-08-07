@@ -15,26 +15,24 @@ def fetch_and_clean_data():
     df_global.columns = ['ds', 'y']
     df_global['ds'] = pd.to_datetime(df_global['ds'])
     
-    # Remove rows where 'y' is 0 or NaN
-    df_global = df_global[(df_global['y'] != 0) & (df_global['y'].notna())]
-    
-    # Resample to weekly data
-    df_global = df_global.set_index('ds')
-    df_weekly = df_global.resample('W-MON').sum().reset_index()
-    
-    print(f"Data cleaned and resampled. Shape: {df_weekly.shape}")
-    return df_weekly
+    # Fill missing dates and interpolate values
+    full_range = pd.date_range(start=df_global['ds'].min(), end=df_global['ds'].max(), freq='D')
+    df_global = df_global.set_index('ds').reindex(full_range).reset_index().rename(columns={'index': 'ds'})
+    df_global['y'] = df_global['y'].interpolate(method='linear')
+
+    print(f"Data cleaned and interpolated. Shape: {df_global.shape}")
+    return df_global
 
 def train_and_predict(df):
     print("Training model and making predictions...")
     model = Prophet(
         yearly_seasonality=True,
-        weekly_seasonality=False,
-        daily_seasonality=False,
+        weekly_seasonality=True,
+        daily_seasonality=True,
         changepoint_prior_scale=0.05
     )
     model.fit(df)
-    future = model.make_future_dataframe(periods=8, freq='W')  # 8 weeks forecast
+    future = model.make_future_dataframe(periods=30)  # 30 days forecast
     forecast = model.predict(future)
     print("Model training and prediction complete.")
     return forecast
@@ -53,8 +51,8 @@ def main():
         
         print("Preparing data for JSON...")
         data = {
-            'dates': df['ds'].astype(str).tolist() + forecast['ds'].tail(8).astype(str).tolist(),
-            'actual': df['y'].tolist() + [None] * 8,
+            'dates': df['ds'].astype(str).tolist() + forecast['ds'].tail(30).astype(str).tolist(),
+            'actual': df['y'].tolist() + [None] * 30,
             'predicted': forecast['yhat'].tolist(),
         }
         
