@@ -10,55 +10,57 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v2
+    - name: Checkout COVID-19 prediction repo
+      uses: actions/checkout@v2
       with:
-        path: covid-data
-    
-    - uses: actions/checkout@v2
+        repository: hiyata/covid-19-prediction
+        path: covid-prediction
+
+    - name: Checkout hiyata.github.io repo
+      uses: actions/checkout@v2
       with:
-        repository: hiytat/hiyata.github.io
-        path: github-pages
+        repository: hiyata/hiyata.github.io
+        path: hiyata.github.io
         token: ${{ secrets.PAT }}  # Personal Access Token with repo scope
-    
+
     - name: Set up Python
       uses: actions/setup-python@v2
       with:
         python-version: '3.8'
-    
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r covid-data/requirements.txt
-    
-    - name: Debug - Print Python script content
-      run: |
-        echo "Content of covid_prediction.py:"
-        cat covid-data/covid_prediction.py
-    
+        pip install -r covid-prediction/requirements.txt
+
     - name: Run prediction script
       run: |
-        cd covid-data
+        cd covid-prediction
         python -u covid_prediction.py
         echo "Current directory contents:"
         ls -la
-        echo "Parent directory contents:"
-        ls -la ..
-        mkdir -p ../github-pages/assets/data
-        if [ -f covid_predictions.json ]; then
-        cp covid_predictions.json ../github-pages/assets/data/
-        echo "File copied successfully"
+        cd ..
+        echo "Root directory contents:"
+        ls -la
+
+    - name: Copy JSON file to github.io repo
+      run: |
+        mkdir -p hiyata.github.io/assets/covid-19-files
+        if [ -f covid-prediction/covid_predictions.json ]; then
+          cp covid-prediction/covid_predictions.json hiyata.github.io/assets/covid-19-files/
+          echo "File copied successfully"
         else
-        echo "covid_predictions.json not found"
-        exit 1
+          echo "covid_predictions.json not found"
+          exit 1
         fi
-        echo "Contents of github-pages/assets/data directory:"
-        ls -la ../github-pages/assets/data
+        echo "Contents of hiyata.github.io/assets/covid-19-files directory:"
+        ls -la hiyata.github.io/assets/covid-19-files
 
     - name: Commit and push to github.io repository
       run: |
-        cd github-pages
+        cd hiyata.github.io
         git config user.name github-actions
         git config user.email github-actions@github.com
-        git add assets/data/covid_predictions.json || echo "No changes to commit"
+        git add assets/covid-19-files/covid_predictions.json
         git commit -m "Update COVID-19 predictions" || echo "No changes to commit"
         git push || echo "No changes to push"

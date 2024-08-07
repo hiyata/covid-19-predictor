@@ -34,6 +34,10 @@ def calculate_metrics(actual, predicted):
 
 def main():
     try:
+        print(f"Python version: {sys.version}")
+        print(f"Current working directory: {os.getcwd()}")
+        print(f"Directory contents: {os.listdir('.')}")
+        
         print("Starting main function...")
         df = fetch_data()
         forecast = train_and_predict(df)
@@ -56,10 +60,14 @@ def main():
         data['last_updated'] = datetime.now().isoformat()
         
         print("Saving to JSON...")
-        with open('covid_predictions.json', 'w') as f:
+        json_path = os.path.join(os.getcwd(), 'covid_predictions.json')
+        with open(json_path, 'w') as f:
             json.dump(data, f)
         
-        print("JSON file saved successfully.")
+        print(f"JSON file saved at: {json_path}")
+        print(f"File exists: {os.path.exists(json_path)}")
+        print(f"File size: {os.path.getsize(json_path)} bytes")
+        print(f"Contents of current directory after saving: {os.listdir('.')}")
     except Exception as e:
         print(f"An error occurred: {str(e)}")
         print("Traceback:")
