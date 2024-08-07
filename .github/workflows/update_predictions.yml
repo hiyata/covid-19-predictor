@@ -34,8 +34,12 @@ jobs:
       run: |
         cd covid-data
         python covid_prediction.py
+        echo "Contents of covid-data directory:"
+        ls -la
         mkdir -p ../github-pages/assets/data
         mv covid_predictions.json ../github-pages/assets/data/ || echo "File not found, skipping move"
+        echo "Contents of github-pages/assets/data directory:"
+        ls -la ../github-pages/assets/data
     
     - name: Commit and push to github.io repository
       run: |
