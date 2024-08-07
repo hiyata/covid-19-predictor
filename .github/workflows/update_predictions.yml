@@ -35,13 +35,13 @@ jobs:
         cd covid-data
         python covid_prediction.py
         mkdir -p ../github-pages/assets/data
-        mv covid_predictions.json ../github-pages/assets/data/
+        mv covid_predictions.json ../github-pages/assets/data/ || echo "File not found, skipping move"
     
     - name: Commit and push to github.io repository
       run: |
         cd github-pages
         git config user.name github-actions
         git config user.email github-actions@github.com
-        git add assets/data/covid_predictions.json
+        git add assets/data/covid_predictions.json || echo "No changes to commit"
         git commit -m "Update COVID-19 predictions" || echo "No changes to commit"
-        git push
+        git push || echo "No changes to push"
