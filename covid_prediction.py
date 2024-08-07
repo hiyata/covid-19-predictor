@@ -6,20 +6,45 @@ import json
 import os
 import sys
 import traceback
+from scipy import interpolate
 
-def fetch_data():
-    print("Fetching data...")
+def fetch_and_clean_data():
+    print("Fetching and cleaning data...")
     url = "https://covid.ourworldindata.org/data/owid-covid-data.csv"
     df = pd.read_csv(url)
     df_global = df.groupby('date')['new_cases'].sum().reset_index()
     df_global.columns = ['ds', 'y']
-    df_global['ds'] = pd.to_datetime(df_global['ds'], format='%Y-%m-%d')
-    print(f"Data fetched. Shape: {df_global.shape}")
-    return df_global
+    df_global['ds'] = pd.to_datetime(df_global['ds'])
+    
+    # Sort the dataframe by date
+    df_global = df_global.sort_values('ds')
+    
+    # Remove rows where 'y' is 0
+    df_global = df_global[df_global['y'] != 0]
+    
+    # Interpolate missing dates
+    date_range = pd.date_range(start=df_global['ds'].min(), end=df_global['ds'].max())
+    df_interpolated = df_global.set_index('ds').reindex(date_range).interpolate()
+    df_interpolated = df_interpolated.reset_index()
+    df_interpolated.columns = ['ds', 'y']
+    
+    # Smooth the data using a 7-day rolling average
+    df_interpolated['y'] = df_interpolated['y'].rolling(window=7, center=True).mean()
+    
+    # Drop any remaining NaN values
+    df_interpolated = df_interpolated.dropna()
+    
+    print(f"Data cleaned and interpolated. Shape: {df_interpolated.shape}")
+    return df_interpolated
 
 def train_and_predict(df):
     print("Training model and making predictions...")
-    model = Prophet()
+    model = Prophet(
+        yearly_seasonality=True,
+        weekly_seasonality=True,
+        daily_seasonality=False,
+        changepoint_prior_scale=0.05
+    )
     model.fit(df)
     future = model.make_future_dataframe(periods=30)
     forecast = model.predict(future)
@@ -39,7 +64,7 @@ def main():
         print(f"Directory contents: {os.listdir('.')}")
         
         print("Starting main function...")
-        df = fetch_data()
+        df = fetch_and_clean_data()
         forecast = train_and_predict(df)
         
         print("Preparing data for JSON...")
