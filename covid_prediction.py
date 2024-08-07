@@ -93,19 +93,14 @@ def train_and_predict_hybrid(df, look_back=15):
     early_stopping = EarlyStopping(monitor='loss', patience=5)
     model.fit(X, y, epochs=50, batch_size=32, verbose=2, callbacks=[early_stopping])
     
-    future = df['y'].values[-look_back:]
+    # Prepare data for prediction
+    future_X = X[-1:]
     future_day_of_week = df['day_of_week'].values[-look_back:].reshape(-1, 1)
-    future = np.log1p(future)
-    future = scaler.transform(future.reshape(-1, 1))
-    
-    future_X = np.hstack((future, future_day_of_week))
-    future_X = np.reshape(future_X, (1, look_back, future_X.shape[1]))
     
     predictions = []
     for i in range(30):
         pred = model.predict(future_X)
         predictions.append(pred[0, 0])
-        # Prepare next input for prediction
         next_day_of_week = (future_day_of_week[-1] + 1) % 7  # Cycle through days of the week
         pred_reshaped = np.hstack((pred.reshape(1, 1), next_day_of_week.reshape(1, 1)))
         future_X = np.concatenate((future_X[:, 1:, :], pred_reshaped.reshape(1, 1, 2)), axis=1)
@@ -129,6 +124,7 @@ def main():
         df = fetch_and_clean_data()
         predictions = train_and_predict_hybrid(df)
         
+        # Use the most recent actual data for evaluation
         actual = df['y'].values[-30:]
         
         print("Preparing data for JSON...")
@@ -153,7 +149,6 @@ def main():
         with open(json_path, 'w') as f:
             json.dump(data, f)
         
-        # Verify if the file has been written correctly
         if os.path.exists(json_path):
             print(f"JSON file saved successfully at: {json_path}")
         else:
