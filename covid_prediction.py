@@ -107,8 +107,7 @@ def train_and_predict_hybrid(df, look_back=15, future_days=30):
 
 def train_and_predict_prophet(df, future_days=30):
     print("Training Prophet model and making predictions...")
-    model = Prophet(daily_seasonality=True, yearly_seasonality=True, weekly_seasonality=True,
-                    changepoint_prior_scale=0.5, seasonality_prior_scale=10)
+    model = Prophet(daily_seasonality=True, yearly_seasonality=True, weekly_seasonality=True)
     model.add_country_holidays(country_name='US')
     model.fit(df[['ds', 'y']])
     
@@ -125,12 +124,11 @@ def train_and_predict_arima(df, future_days=30):
     print("Training ARIMA model and making predictions...")
     
     # Automatically find the best ARIMA parameters
-    auto_model = auto_arima(df['y'], seasonal=True, m=7, stepwise=True, suppress_warnings=True, 
-                            error_action="ignore", max_p=5, max_d=2, max_q=5)
+    auto_model = auto_arima(df['y'], seasonal=True, m=7, stepwise=True, suppress_warnings=True, error_action="ignore", max_p=5, max_d=2, max_q=5)
     best_params = auto_model.get_params()
     
     # Train the ARIMA model with the best parameters
-    model = ARIMA(df['y'], order=best_params['order'], seasonal_order=best_params['seasonal_order'])
+    model = ARIMA(df['y'], order=(best_params['order'][0], best_params['order'][1], best_params['order'][2]), seasonal_order=best_params['seasonal_order'])
     results = model.fit()
     
     # Make predictions
@@ -140,6 +138,19 @@ def train_and_predict_arima(df, future_days=30):
     
     print("ARIMA model training and prediction complete.")
     return full_arima_predicted, forecast
+
+def update_historical_data(historical_data, new_data, date):
+    historical_data[date] = {
+        'hybrid': new_data['future_predicted'][0],
+        'prophet': new_data['prophet_future_predicted'][0],
+        'arima': new_data['arima_future_predicted'][0]
+    }
+    
+    # Save updated historical data
+    with open('historical_predictions.json', 'w') as f:
+        json.dump(historical_data, f)
+    
+    return historical_data
 
 def calculate_metrics(actual, predicted):
     mae = mean_absolute_error(actual, predicted)
@@ -154,7 +165,7 @@ def main():
         last_date = df['ds'].max()
         future_dates = [last_date + timedelta(days=i) for i in range(1, 31)]
         
-        evaluation_days = 30  # Use the last 30 days for evaluation
+        evaluation_days = 90  # Increase evaluation period to 90 days
         
         full_predicted, future_predictions = train_and_predict_hybrid(df, future_days=30)
         full_prophet_predicted, prophet_predictions = train_and_predict_prophet(df, future_days=30)
@@ -207,14 +218,7 @@ def main():
         except FileNotFoundError:
             historical_data = {}
         
-        historical_data[last_date.strftime('%Y-%m-%d')] = {
-            'hybrid': future_predictions[0],
-            'prophet': prophet_predictions[0],
-            'arima': arima_predictions[0]
-        }
-        
-        with open('historical_predictions.json', 'w') as f:
-            json.dump(historical_data, f)
+        historical_data = update_historical_data(historical_data, data, last_date.strftime('%Y-%m-%d'))
         
         # Read back the file to ensure it was written correctly
         with open(json_path, 'r') as f:
