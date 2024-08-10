@@ -38,6 +38,7 @@ def fetch_and_clean_data():
     full_range = pd.date_range(start=df_global['ds'].min(), end=df_global['ds'].max(), freq='D')
     df_global = df_global.set_index('ds').reindex(full_range).reset_index().rename(columns={'index': 'ds'})
     df_global['y'] = df_global['y'].interpolate(method='linear')
+    df_global['y'] = df_global['y'].clip(lower=0)  # Ensure non-negative values
     
     df_global['day_of_week'] = df_global['ds'].dt.dayofweek
     
@@ -106,7 +107,8 @@ def train_and_predict_hybrid(df, look_back=15, future_days=30):
 
 def train_and_predict_prophet(df, future_days=30):
     print("Training Prophet model and making predictions...")
-    model = Prophet(daily_seasonality=True)
+    model = Prophet(daily_seasonality=True, yearly_seasonality=True, weekly_seasonality=True)
+    model.add_country_holidays(country_name='US')
     model.fit(df[['ds', 'y']])
     
     future = model.make_future_dataframe(periods=future_days)
@@ -122,11 +124,11 @@ def train_and_predict_arima(df, future_days=30):
     print("Training ARIMA model and making predictions...")
     
     # Automatically find the best ARIMA parameters
-    auto_model = auto_arima(df['y'], seasonal=False, stepwise=True, suppress_warnings=True, error_action="ignore", max_p=5, max_d=2, max_q=5)
+    auto_model = auto_arima(df['y'], seasonal=True, m=7, stepwise=True, suppress_warnings=True, error_action="ignore", max_p=5, max_d=2, max_q=5)
     best_params = auto_model.get_params()
     
     # Train the ARIMA model with the best parameters
-    model = ARIMA(df['y'], order=(best_params['order'][0], best_params['order'][1], best_params['order'][2]))
+    model = ARIMA(df['y'], order=(best_params['order'][0], best_params['order'][1], best_params['order'][2]), seasonal_order=best_params['seasonal_order'])
     results = model.fit()
     
     # Make predictions
