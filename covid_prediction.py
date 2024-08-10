@@ -11,6 +11,10 @@ from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, GRU, Conv1D, MaxPooling1D, Flatten, Dense
 from tensorflow.keras.callbacks import EarlyStopping
 from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import mean_absolute_error, mean_squared_error, mean_absolute_percentage_error
+from prophet import Prophet
+from statsmodels.tsa.arima.model import ARIMA
+from pmdarima import auto_arima
 
 def fetch_and_clean_data():
     print("Fetching and cleaning data...")
@@ -25,20 +29,16 @@ def fetch_and_clean_data():
     
     df = pd.read_csv(url)
     
-    # Aggregate global daily cases
     df_global = df.groupby('Date_reported')['New_cases'].sum().reset_index()
     df_global.columns = ['ds', 'y']
     df_global['ds'] = pd.to_datetime(df_global['ds'])
     
-    # Add day of the week as a feature
     df_global['day_of_week'] = df_global['ds'].dt.dayofweek
     
-    # Fill missing dates and interpolate values
     full_range = pd.date_range(start=df_global['ds'].min(), end=df_global['ds'].max(), freq='D')
     df_global = df_global.set_index('ds').reindex(full_range).reset_index().rename(columns={'index': 'ds'})
     df_global['y'] = df_global['y'].interpolate(method='linear')
     
-    # Add day of the week for the filled dates
     df_global['day_of_week'] = df_global['ds'].dt.dayofweek
     
     print(f"Data cleaned and interpolated. Shape: {df_global.shape}")
@@ -49,7 +49,6 @@ def prepare_data(df, look_back=15):
     day_of_week = df['day_of_week'].values.reshape(-1, 1)
     scaler = MinMaxScaler(feature_range=(0, 1))
     
-    # Apply log transformation to stabilize variance
     data = np.log1p(data)
     data = scaler.fit_transform(data.reshape(-1, 1))
     
@@ -84,76 +83,118 @@ def train_and_predict_hybrid(df, look_back=15):
     early_stopping = EarlyStopping(monitor='loss', patience=5)
     model.fit(X, y, epochs=50, batch_size=32, verbose=2, callbacks=[early_stopping])
     
-    # Make predictions for known dates
-    known_predictions = model.predict(X)
-    known_predictions = scaler.inverse_transform(known_predictions).flatten()
-    known_predictions = np.expm1(known_predictions)
-    
-    # Prepare data for future predictions
     future_X = X[-1:]
     future_day_of_week = df['day_of_week'].values[-look_back:].reshape(-1, 1)
     
-    future_predictions = []
+    predictions = []
     for i in range(30):
         pred = model.predict(future_X)
-        future_predictions.append(pred[0, 0])
+        predictions.append(pred[0, 0])
         next_day_of_week = (future_day_of_week[-1] + 1) % 7
         pred_reshaped = np.hstack((pred.reshape(1, 1), next_day_of_week.reshape(1, 1)))
         future_X = np.concatenate((future_X[:, 1:, :], pred_reshaped.reshape(1, 1, 2)), axis=1)
         future_day_of_week = np.append(future_day_of_week[1:], next_day_of_week)
     
-    future_predictions = scaler.inverse_transform(np.array(future_predictions).reshape(-1, 1))
-    future_predictions = np.expm1(future_predictions).flatten()
+    predictions = scaler.inverse_transform(np.array(predictions).reshape(-1, 1))
+    predictions = np.expm1(predictions)
+    
+    full_predicted = np.concatenate((df['y'].values[:-30], predictions.flatten()))
     
     print("Hybrid model training and prediction complete.")
-    return known_predictions, future_predictions
+    return full_predicted, predictions
+
+def train_and_predict_prophet(df):
+    print("Training Prophet model and making predictions...")
+    model = Prophet(daily_seasonality=True)
+    model.fit(df[['ds', 'y']])
+    
+    future = model.make_future_dataframe(periods=30)
+    forecast = model.predict(future)
+    
+    prophet_predictions = forecast['yhat'].values[-30:]
+    full_prophet_predicted = forecast['yhat'].values
+    
+    print("Prophet model training and prediction complete.")
+    return full_prophet_predicted, prophet_predictions
+
+def train_and_predict_arima(df):
+    print("Training ARIMA model and making predictions...")
+    
+    # Automatically find the best ARIMA parameters
+    auto_model = auto_arima(df['y'], seasonal=False, stepwise=True, suppress_warnings=True, error_action="ignore", max_p=5, max_d=2, max_q=5)
+    best_params = auto_model.get_params()
+    
+    # Train the ARIMA model with the best parameters
+    model = ARIMA(df['y'], order=(best_params['order'][0], best_params['order'][1], best_params['order'][2]))
+    results = model.fit()
+    
+    # Make predictions
+    forecast = results.forecast(steps=30)
+    full_arima_predicted = np.concatenate([df['y'].values, forecast])
+    
+    print("ARIMA model training and prediction complete.")
+    return full_arima_predicted, forecast
 
 def calculate_metrics(actual, predicted):
-    mae = np.mean(np.abs(actual - predicted))
-    rmse = np.sqrt(np.mean((actual - predicted)**2))
-    mape = np.mean(np.abs((actual - predicted) / actual)) * 100
+    mae = mean_absolute_error(actual, predicted)
+    rmse = np.sqrt(mean_squared_error(actual, predicted))
+    mape = mean_absolute_percentage_error(actual, predicted) * 100
     return mae, rmse, mape
 
 def main():
     try:
         print("Starting main function...")
         df = fetch_and_clean_data()
-        known_predictions, future_predictions = train_and_predict_hybrid(df)
+        full_predicted, future_predictions = train_and_predict_hybrid(df)
+        full_prophet_predicted, prophet_predictions = train_and_predict_prophet(df)
+        full_arima_predicted, arima_predictions = train_and_predict_arima(df)
         
-        # Separate actual and predicted data
-        actual = df['y'].values
-        predicted = known_predictions[:len(actual)]  # Predictions for known dates
+        actual = df['y'].values[-30:]
         
         print("Preparing data for JSON...")
         data = {
-            'dates': df['ds'].astype(str).tolist(),
-            'actual': actual.tolist(),
-            'predicted': predicted.tolist(),
-            'future_dates': [str(df['ds'].iloc[-1] + timedelta(days=i)) for i in range(1, 31)],
-            'future_predicted': future_predictions.tolist()
+            'dates': df['ds'].astype(str).tolist() + [str(df['ds'].iloc[-1] + timedelta(days=i)) for i in range(1, 31)],
+            'actual': df['y'].tolist() + [None] * 30,
+            'predicted': full_predicted.tolist(),
+            'future_predicted': future_predictions.flatten().tolist(),
+            'prophet_predicted': full_prophet_predicted.tolist(),
+            'prophet_future_predicted': prophet_predictions.tolist(),
+            'arima_predicted': full_arima_predicted.tolist(),
+            'arima_future_predicted': arima_predictions.tolist()
         }
         
         print("Calculating metrics...")
-        mae, rmse, mape = calculate_metrics(actual[-30:], predicted[-30:])  # Use last 30 days for metrics
+        hybrid_mae, hybrid_rmse, hybrid_mape = calculate_metrics(actual, future_predictions.flatten()[:len(actual)])
+        prophet_mae, prophet_rmse, prophet_mape = calculate_metrics(actual, prophet_predictions[:len(actual)])
+        arima_mae, arima_rmse, arima_mape = calculate_metrics(actual, arima_predictions[:len(actual)])
         
-        data['mae'] = float(mae)
-        data['rmse'] = float(rmse)
-        data['mape'] = float(mape)
+        data['hybrid_mae'] = float(hybrid_mae)
+        data['hybrid_rmse'] = float(hybrid_rmse)
+        data['hybrid_mape'] = float(hybrid_mape)
+        data['prophet_mae'] = float(prophet_mae)
+        data['prophet_rmse'] = float(prophet_rmse)
+        data['prophet_mape'] = float(prophet_mape)
+        data['arima_mae'] = float(arima_mae)
+        data['arima_rmse'] = float(arima_rmse)
+        data['arima_mape'] = float(arima_mape)
         data['last_updated'] = datetime.now().isoformat()
         
         print("Saving to JSON...")
         json_path = os.path.join(os.getcwd(), 'covid_predictions.json')
+        print(f"Attempting to save JSON file at: {json_path}")
+
         with open(json_path, 'w') as f:
             json.dump(data, f)
         
-        print(f"JSON file saved successfully at: {json_path}")
+        if os.path.exists(json_path):
+            print(f"JSON file saved successfully at: {json_path}")
+        else:
+            print("Failed to save JSON file.")
         
-        # Print some debug information
-        print(f"Number of actual data points: {len(data['actual'])}")
-        print(f"Number of predicted data points: {len(data['predicted'])}")
-        print(f"First few actual values: {data['actual'][:5]}")
-        print(f"First few predicted values: {data['predicted'][:5]}")
-        
+        # Read back the file to ensure it was written correctly
+        with open(json_path, 'r') as f:
+            saved_data = json.load(f)
+            print(f"Read back JSON data: {saved_data}")
     except Exception as e:
         print(f"An error occurred: {str(e)}")
         print("Traceback:")

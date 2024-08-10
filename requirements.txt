@@ -4,3 +4,6 @@ prophet
 requests
 tensorflow
 scikit-learn
+prophet
+pmdarima
+statsmodels
