@@ -44,14 +44,21 @@ jobs:
         echo "Root directory contents:"
         ls -la
 
-    - name: Copy JSON file to github.io repo
+    - name: Copy JSON files to github.io repo
       run: |
         mkdir -p hiyata.github.io/assets/covid-19-files
         if [ -f covid-predictor/covid_predictions.json ]; then
           cp covid-predictor/covid_predictions.json hiyata.github.io/assets/covid-19-files/
-          echo "File copied successfully"
+          echo "covid_predictions.json copied successfully"
         else
           echo "covid_predictions.json not found"
+          exit 1
+        fi
+        if [ -f covid-predictor/historical_predictions.json ]; then
+          cp covid-predictor/historical_predictions.json hiyata.github.io/assets/covid-19-files/
+          echo "historical_predictions.json copied successfully"
+        else
+          echo "historical_predictions.json not found"
           exit 1
         fi
         echo "Contents of hiyata.github.io/assets/covid-19-files directory:"
@@ -62,6 +69,6 @@ jobs:
         cd hiyata.github.io
         git config user.name github-actions
         git config user.email github-actions@github.com
-        git add assets/covid-19-files/covid_predictions.json
-        git commit -m "Update COVID-19 predictions" || echo "No changes to commit"
+        git add assets/covid-19-files/covid_predictions.json assets/covid-19-files/historical_predictions.json
+        git commit -m "Update COVID-19 predictions and historical data" || echo "No changes to commit"
         git push || echo "No changes to push"
