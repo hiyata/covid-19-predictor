@@ -114,8 +114,8 @@ def train_and_predict_prophet(df, future_days=30):
     future = model.make_future_dataframe(periods=future_days)
     forecast = model.predict(future)
     
-    prophet_predictions = np.maximum(forecast['yhat'].values[-future_days:], 0)  # Ensure non-negative predictions
-    full_prophet_predicted = np.maximum(forecast['yhat'].values, 0)  # Ensure non-negative predictions
+    prophet_predictions = np.maximum(forecast['yhat'].values[-future_days:], 0)
+    full_prophet_predicted = np.maximum(forecast['yhat'].values, 0)
     
     print("Prophet model training and prediction complete.")
     return full_prophet_predicted, prophet_predictions
@@ -134,16 +134,11 @@ def train_and_predict_arima(df, future_days=30):
     # Make predictions
     forecast = results.forecast(steps=future_days)
     forecast = np.maximum(forecast, 0)  # Ensure non-negative predictions
-    full_arima_predicted = np.maximum(np.concatenate([df['y'].values, forecast]), 0)  # Ensure non-negative predictions
+    full_arima_predicted = np.maximum(np.concatenate([results.fittedvalues, forecast]), 0)
     
     print("ARIMA model training and prediction complete.")
     return full_arima_predicted, forecast
 
-def calculate_metrics(actual, predicted):
-    mae = mean_absolute_error(actual, predicted)
-    rmse = np.sqrt(mean_squared_error(actual, predicted))
-    mape = mean_absolute_percentage_error(actual, predicted) * 100
-    return mae, rmse, mape
 
 def update_historical_data(historical_data, new_data, date):
     historical_data[date] = {
@@ -158,12 +153,20 @@ def update_historical_data(historical_data, new_data, date):
     
     return historical_data
 
+def calculate_metrics(actual, predicted):
+    mae = mean_absolute_error(actual, predicted)
+    rmse = np.sqrt(mean_squared_error(actual, predicted))
+    mape = mean_absolute_percentage_error(actual, predicted) * 100
+    return mae, rmse, mape
+
 def main():
     try:
         print("Starting main function...")
         df = fetch_and_clean_data()
         last_date = df['ds'].max()
         future_dates = [last_date + timedelta(days=i) for i in range(1, 31)]
+        
+        evaluation_days = 90  # Increase evaluation period to 90 days
         
         full_predicted, future_predictions = train_and_predict_hybrid(df, future_days=30)
         full_prophet_predicted, prophet_predictions = train_and_predict_prophet(df, future_days=30)
@@ -182,9 +185,9 @@ def main():
         }
         
         print("Calculating metrics...")
-        hybrid_mae, hybrid_rmse, hybrid_mape = calculate_metrics(df['y'].values[-30:], full_predicted[-60:-30])
-        prophet_mae, prophet_rmse, prophet_mape = calculate_metrics(df['y'].values[-30:], full_prophet_predicted[-60:-30])
-        arima_mae, arima_rmse, arima_mape = calculate_metrics(df['y'].values[-30:], full_arima_predicted[-60:-30])
+        hybrid_mae, hybrid_rmse, hybrid_mape = calculate_metrics(df['y'].values[-evaluation_days:], full_predicted[-evaluation_days-30:-30])
+        prophet_mae, prophet_rmse, prophet_mape = calculate_metrics(df['y'].values[-evaluation_days:], full_prophet_predicted[-evaluation_days-30:-30])
+        arima_mae, arima_rmse, arima_mape = calculate_metrics(df['y'].values[-evaluation_days:], full_arima_predicted[-evaluation_days-30:-30])
         
         data['hybrid_mae'] = float(hybrid_mae)
         data['hybrid_rmse'] = float(hybrid_rmse)
