@@ -130,10 +130,34 @@ def train_and_predict_arima(df):
     
     # Make predictions
     forecast = results.forecast(steps=30)
-    full_arima_predicted = np.concatenate([df['y'].values, forecast])
+    # Ensure predictions are non-negative
+    forecast = np.maximum(forecast, 0)
+    full_arima_predicted = np.maximum(np.concatenate([df['y'].values, forecast]), 0)
     
     print("ARIMA model training and prediction complete.")
     return full_arima_predicted, forecast
+
+def update_historical_data(historical_data, new_data):
+    today = datetime.now().date()
+    
+    # Update predictions for today
+    historical_data[str(today)] = {
+        'hybrid': new_data['future_predicted'][0],
+        'prophet': new_data['prophet_future_predicted'][0],
+        'arima': new_data['arima_future_predicted'][0]
+    }
+    
+    # Update actual value for yesterday if available
+    yesterday = str(today - timedelta(days=1))
+    if yesterday in historical_data and new_data['actual'][-31] is not None:
+        historical_data[yesterday]['actual'] = new_data['actual'][-31]
+    
+    # Save updated historical data
+    with open('historical_predictions.json', 'w') as f:
+        json.dump(historical_data, f)
+    
+    return historical_data
+
 
 def calculate_metrics(actual, predicted):
     mae = mean_absolute_error(actual, predicted)
@@ -178,6 +202,15 @@ def main():
         data['arima_rmse'] = float(arima_rmse)
         data['arima_mape'] = float(arima_mape)
         data['last_updated'] = datetime.now().isoformat()
+        
+        # Update historical data
+        try:
+            with open('historical_predictions.json', 'r') as f:
+                historical_data = json.load(f)
+        except FileNotFoundError:
+            historical_data = {}
+        
+        historical_data = update_historical_data(historical_data, data)
         
         print("Saving to JSON...")
         json_path = os.path.join(os.getcwd(), 'covid_predictions.json')
