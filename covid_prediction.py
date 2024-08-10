@@ -1,5 +1,3 @@
-# covid_prediction.py
-
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
@@ -48,15 +46,12 @@ def fetch_and_clean_data():
 def train_and_predict_arima(df, future_days=30):
     print("Training ARIMA model and making predictions...")
     
-    # Automatically find the best ARIMA parameters
     auto_model = auto_arima(df['y'], seasonal=True, m=7, stepwise=True, suppress_warnings=True, error_action="ignore", max_p=5, max_d=2, max_q=5)
     best_params = auto_model.get_params()
     
-    # Train the ARIMA model with the best parameters
     model = ARIMA(df['y'], order=(best_params['order'][0], best_params['order'][1], best_params['order'][2]), seasonal_order=best_params['seasonal_order'])
     results = model.fit()
     
-    # Make predictions
     forecast = results.forecast(steps=future_days)
     forecast = np.maximum(forecast, 0)  # Ensure non-negative predictions
     full_arima_predicted = np.maximum(np.concatenate([results.fittedvalues, forecast]), 0)
@@ -87,7 +82,6 @@ def train_and_predict_lstm(df, future_days=30):
     model.compile(optimizer=Adam(learning_rate=0.001), loss='mse')
     model.fit(X, y, epochs=100, batch_size=32, verbose=0)
     
-    # Make predictions
     last_sequence = scaled_data[-look_back:]
     predictions = []
     for _ in range(future_days):
@@ -108,6 +102,17 @@ def calculate_metrics(actual, predicted):
     mape = mean_absolute_percentage_error(actual, predicted) * 100
     return mae, rmse, mape
 
+def update_historical_data(historical_data, new_data, date):
+    historical_data[date] = {
+        'arima': new_data['arima_future_predicted'][0],
+        'lstm': new_data['lstm_future_predicted'][0]
+    }
+    
+    with open('historical_predictions.json', 'w') as f:
+        json.dump(historical_data, f)
+    
+    return historical_data
+
 def main():
     try:
         print("Starting main function...")
@@ -115,7 +120,7 @@ def main():
         last_date = df['ds'].max()
         future_dates = [last_date + timedelta(days=i) for i in range(1, 31)]
         
-        evaluation_days = 90  # Increase evaluation period to 90 days
+        evaluation_days = 90
         
         full_arima_predicted, arima_predictions = train_and_predict_arima(df, future_days=30)
         full_lstm_predicted, lstm_predictions = train_and_predict_lstm(df, future_days=30)
@@ -153,6 +158,15 @@ def main():
             print(f"JSON file saved successfully at: {json_path}")
         else:
             print("Failed to save JSON file.")
+        
+        # Update historical data
+        try:
+            with open('historical_predictions.json', 'r') as f:
+                historical_data = json.load(f)
+        except FileNotFoundError:
+            historical_data = {}
+        
+        historical_data = update_historical_data(historical_data, data, last_date.strftime('%Y-%m-%d'))
         
         # Read back the file to ensure it was written correctly
         with open(json_path, 'r') as f:
