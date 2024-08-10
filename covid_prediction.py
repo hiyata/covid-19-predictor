@@ -97,6 +97,7 @@ def train_and_predict_hybrid(df, look_back=15, future_days=30):
     
     predictions = scaler.inverse_transform(np.array(predictions).reshape(-1, 1))
     predictions = np.expm1(predictions)
+    predictions = np.maximum(predictions, 0)  # Ensure non-negative predictions
     
     full_predicted = np.concatenate((df['y'].values, predictions.flatten()))
     
@@ -111,8 +112,8 @@ def train_and_predict_prophet(df, future_days=30):
     future = model.make_future_dataframe(periods=future_days)
     forecast = model.predict(future)
     
-    prophet_predictions = forecast['yhat'].values[-future_days:]
-    full_prophet_predicted = forecast['yhat'].values
+    prophet_predictions = np.maximum(forecast['yhat'].values[-future_days:], 0)  # Ensure non-negative predictions
+    full_prophet_predicted = np.maximum(forecast['yhat'].values, 0)  # Ensure non-negative predictions
     
     print("Prophet model training and prediction complete.")
     return full_prophet_predicted, prophet_predictions
@@ -130,7 +131,8 @@ def train_and_predict_arima(df, future_days=30):
     
     # Make predictions
     forecast = results.forecast(steps=future_days)
-    full_arima_predicted = np.concatenate([df['y'].values, forecast])
+    forecast = np.maximum(forecast, 0)  # Ensure non-negative predictions
+    full_arima_predicted = np.maximum(np.concatenate([df['y'].values, forecast]), 0)  # Ensure non-negative predictions
     
     print("ARIMA model training and prediction complete.")
     return full_arima_predicted, forecast
