@@ -62,7 +62,7 @@ def prepare_data(df, look_back=15):
     y = np.array(y)
     return X, y, scaler
 
-def train_and_predict_hybrid(df, look_back=15):
+def train_and_predict_hybrid(df, look_back=15, future_days=30):
     print("Training hybrid model and making predictions...")
     X, y, scaler = prepare_data(df, look_back)
     
@@ -87,7 +87,7 @@ def train_and_predict_hybrid(df, look_back=15):
     future_day_of_week = df['day_of_week'].values[-look_back:].reshape(-1, 1)
     
     predictions = []
-    for i in range(30):
+    for i in range(future_days):
         pred = model.predict(future_X)
         predictions.append(pred[0, 0])
         next_day_of_week = (future_day_of_week[-1] + 1) % 7
@@ -98,26 +98,26 @@ def train_and_predict_hybrid(df, look_back=15):
     predictions = scaler.inverse_transform(np.array(predictions).reshape(-1, 1))
     predictions = np.expm1(predictions)
     
-    full_predicted = np.concatenate((df['y'].values[:-30], predictions.flatten()))
+    full_predicted = np.concatenate((df['y'].values, predictions.flatten()))
     
     print("Hybrid model training and prediction complete.")
     return full_predicted, predictions
 
-def train_and_predict_prophet(df):
+def train_and_predict_prophet(df, future_days=30):
     print("Training Prophet model and making predictions...")
     model = Prophet(daily_seasonality=True)
     model.fit(df[['ds', 'y']])
     
-    future = model.make_future_dataframe(periods=30)
+    future = model.make_future_dataframe(periods=future_days)
     forecast = model.predict(future)
     
-    prophet_predictions = forecast['yhat'].values[-30:]
+    prophet_predictions = forecast['yhat'].values[-future_days:]
     full_prophet_predicted = forecast['yhat'].values
     
     print("Prophet model training and prediction complete.")
     return full_prophet_predicted, prophet_predictions
 
-def train_and_predict_arima(df):
+def train_and_predict_arima(df, future_days=30):
     print("Training ARIMA model and making predictions...")
     
     # Automatically find the best ARIMA parameters
@@ -129,35 +129,11 @@ def train_and_predict_arima(df):
     results = model.fit()
     
     # Make predictions
-    forecast = results.forecast(steps=30)
-    # Ensure predictions are non-negative
-    forecast = np.maximum(forecast, 0)
-    full_arima_predicted = np.maximum(np.concatenate([df['y'].values, forecast]), 0)
+    forecast = results.forecast(steps=future_days)
+    full_arima_predicted = np.concatenate([df['y'].values, forecast])
     
     print("ARIMA model training and prediction complete.")
     return full_arima_predicted, forecast
-
-def update_historical_data(historical_data, new_data):
-    today = datetime.now().date()
-    
-    # Update predictions for today
-    historical_data[str(today)] = {
-        'hybrid': new_data['future_predicted'][0],
-        'prophet': new_data['prophet_future_predicted'][0],
-        'arima': new_data['arima_future_predicted'][0]
-    }
-    
-    # Update actual value for yesterday if available
-    yesterday = str(today - timedelta(days=1))
-    if yesterday in historical_data and new_data['actual'][-31] is not None:
-        historical_data[yesterday]['actual'] = new_data['actual'][-31]
-    
-    # Save updated historical data
-    with open('historical_predictions.json', 'w') as f:
-        json.dump(historical_data, f)
-    
-    return historical_data
-
 
 def calculate_metrics(actual, predicted):
     mae = mean_absolute_error(actual, predicted)
@@ -165,19 +141,33 @@ def calculate_metrics(actual, predicted):
     mape = mean_absolute_percentage_error(actual, predicted) * 100
     return mae, rmse, mape
 
+def update_historical_data(historical_data, new_data, date):
+    historical_data[date] = {
+        'hybrid': new_data['future_predicted'][0],
+        'prophet': new_data['prophet_future_predicted'][0],
+        'arima': new_data['arima_future_predicted'][0]
+    }
+    
+    # Save updated historical data
+    with open('historical_predictions.json', 'w') as f:
+        json.dump(historical_data, f)
+    
+    return historical_data
+
 def main():
     try:
         print("Starting main function...")
         df = fetch_and_clean_data()
-        full_predicted, future_predictions = train_and_predict_hybrid(df)
-        full_prophet_predicted, prophet_predictions = train_and_predict_prophet(df)
-        full_arima_predicted, arima_predictions = train_and_predict_arima(df)
+        last_date = df['ds'].max()
+        future_dates = [last_date + timedelta(days=i) for i in range(1, 31)]
         
-        actual = df['y'].values[-30:]
+        full_predicted, future_predictions = train_and_predict_hybrid(df, future_days=30)
+        full_prophet_predicted, prophet_predictions = train_and_predict_prophet(df, future_days=30)
+        full_arima_predicted, arima_predictions = train_and_predict_arima(df, future_days=30)
         
         print("Preparing data for JSON...")
         data = {
-            'dates': df['ds'].astype(str).tolist() + [str(df['ds'].iloc[-1] + timedelta(days=i)) for i in range(1, 31)],
+            'dates': df['ds'].astype(str).tolist() + [d.strftime('%Y-%m-%d') for d in future_dates],
             'actual': df['y'].tolist() + [None] * 30,
             'predicted': full_predicted.tolist(),
             'future_predicted': future_predictions.flatten().tolist(),
@@ -188,9 +178,9 @@ def main():
         }
         
         print("Calculating metrics...")
-        hybrid_mae, hybrid_rmse, hybrid_mape = calculate_metrics(actual, future_predictions.flatten()[:len(actual)])
-        prophet_mae, prophet_rmse, prophet_mape = calculate_metrics(actual, prophet_predictions[:len(actual)])
-        arima_mae, arima_rmse, arima_mape = calculate_metrics(actual, arima_predictions[:len(actual)])
+        hybrid_mae, hybrid_rmse, hybrid_mape = calculate_metrics(df['y'].values[-30:], full_predicted[-60:-30])
+        prophet_mae, prophet_rmse, prophet_mape = calculate_metrics(df['y'].values[-30:], full_prophet_predicted[-60:-30])
+        arima_mae, arima_rmse, arima_mape = calculate_metrics(df['y'].values[-30:], full_arima_predicted[-60:-30])
         
         data['hybrid_mae'] = float(hybrid_mae)
         data['hybrid_rmse'] = float(hybrid_rmse)
@@ -203,15 +193,6 @@ def main():
         data['arima_mape'] = float(arima_mape)
         data['last_updated'] = datetime.now().isoformat()
         
-        # Update historical data
-        try:
-            with open('historical_predictions.json', 'r') as f:
-                historical_data = json.load(f)
-        except FileNotFoundError:
-            historical_data = {}
-        
-        historical_data = update_historical_data(historical_data, data)
-        
         print("Saving to JSON...")
         json_path = os.path.join(os.getcwd(), 'covid_predictions.json')
         print(f"Attempting to save JSON file at: {json_path}")
@@ -223,6 +204,15 @@ def main():
             print(f"JSON file saved successfully at: {json_path}")
         else:
             print("Failed to save JSON file.")
+        
+        # Update historical data
+        try:
+            with open('historical_predictions.json', 'r') as f:
+                historical_data = json.load(f)
+        except FileNotFoundError:
+            historical_data = {}
+        
+        historical_data = update_historical_data(historical_data, data, last_date.strftime('%Y-%m-%d'))
         
         # Read back the file to ensure it was written correctly
         with open(json_path, 'r') as f:
