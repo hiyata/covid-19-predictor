@@ -11,8 +11,9 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, mean_absolu
 from statsmodels.tsa.arima.model import ARIMA
 from pmdarima import auto_arima
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense
+from tensorflow.keras.layers import LSTM, Dense, Dropout
 from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.callbacks import EarlyStopping
 
 def fetch_and_clean_data():
     print("Fetching and cleaning data...")
@@ -67,7 +68,7 @@ def prepare_data_lstm(data, look_back=7):
     return np.array(X), np.array(y)
 
 def train_and_predict_lstm(df, future_days=30):
-    print("Training LSTM model and making predictions...")
+    print("Training simplified LSTM model and making predictions...")
     
     scaler = MinMaxScaler(feature_range=(0, 1))
     scaled_data = scaler.fit_transform(df['y'].values.reshape(-1, 1))
@@ -76,11 +77,15 @@ def train_and_predict_lstm(df, future_days=30):
     X, y = prepare_data_lstm(scaled_data, look_back)
     
     model = Sequential([
-        LSTM(50, activation='relu', input_shape=(look_back, 1)),
+        LSTM(30, activation='relu', input_shape=(look_back, 1)),  # Reduced units
+        Dropout(0.1),  # Reduced dropout rate
         Dense(1)
     ])
     model.compile(optimizer=Adam(learning_rate=0.001), loss='mse')
-    model.fit(X, y, epochs=100, batch_size=32, verbose=0)
+    
+    early_stopping = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+    
+    model.fit(X, y, epochs=30, batch_size=32, validation_split=0.2, callbacks=[early_stopping], verbose=0)
     
     last_sequence = scaled_data[-look_back:]
     predictions = []
