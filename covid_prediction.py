@@ -73,11 +73,11 @@ def train_and_predict_lstm(df, future_days=30):
     scaler = MinMaxScaler(feature_range=(0, 1))
     scaled_data = scaler.fit_transform(df['y'].values.reshape(-1, 1))
     
-    look_back = 7
+    look_back = 30
     X, y = prepare_data_lstm(scaled_data, look_back)
     
     model = Sequential([
-        LSTM(30, activation='relu', input_shape=(look_back, 1)),  # Reduced units
+        LSTM(15, activation='relu', input_shape=(look_back, 1)),  # Reduced units
         Dropout(0.1),  # Reduced dropout rate
         Dense(1)
     ])
