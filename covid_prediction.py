@@ -6,8 +6,8 @@ from datetime import datetime, timedelta
 import requests
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense
-from tensorflow.keras.models import load_model
+from tensorflow.keras.layers import LSTM, GRU, Dense, Dropout, BatchNormalization
+from tensorflow.keras.optimizers import Adam
 import os
 
 def fetch_and_clean_data():
@@ -32,16 +32,49 @@ def fetch_and_clean_data():
 def load_lstm_model():
     print("Loading LSTM model...")
     try:
-        with open('build_config.json', 'r') as json_file:
-            build_config = json.load(json_file)
-        input_shape = tuple(build_config['input_shape'])
+        # Load the hyperparameters from the trial JSON file
+        with open('trial.json', 'r') as f:
+            trial_data = json.load(f)
         
-        model = Sequential([
-            LSTM(50, activation='relu', input_shape=input_shape[1:]),
-            Dense(1)
-        ])
+        hyperparameters = trial_data['hyperparameters']['values']
         
+        # Reconstruct the model based on the hyperparameters
+        model = Sequential()
+        
+        for i in range(hyperparameters['num_layers']):
+            layer_type = hyperparameters[f'layer_type_{i}']
+            units = hyperparameters[f'units_{i}']
+            dropout = hyperparameters[f'dropout_{i}']
+            normalization = hyperparameters[f'normalization_{i}']
+            
+            if i == 0:
+                input_shape = (hyperparameters['sequence_length'], 1)
+                if layer_type == 'LSTM':
+                    model.add(LSTM(units, activation='relu', input_shape=input_shape, return_sequences=(i < hyperparameters['num_layers'] - 1)))
+                else:  # GRU
+                    model.add(GRU(units, activation='relu', input_shape=input_shape, return_sequences=(i < hyperparameters['num_layers'] - 1)))
+            else:
+                if layer_type == 'LSTM':
+                    model.add(LSTM(units, activation='relu', return_sequences=(i < hyperparameters['num_layers'] - 1)))
+                else:  # GRU
+                    model.add(GRU(units, activation='relu', return_sequences=(i < hyperparameters['num_layers'] - 1)))
+            
+            if normalization:
+                model.add(BatchNormalization())
+            
+            model.add(Dropout(dropout))
+        
+        for i in range(hyperparameters['num_dense_layers']):
+            model.add(Dense(hyperparameters[f'dense_units_{i}'], activation='relu'))
+        
+        model.add(Dense(1))
+        
+        model.compile(optimizer=Adam(learning_rate=hyperparameters['learning_rate']),
+                      loss='mean_absolute_percentage_error')
+        
+        # Load the weights
         model.load_weights('checkpoint.weights.h5')
+        
         print("LSTM model loaded successfully.")
         return model
     except Exception as e:
@@ -110,7 +143,11 @@ def main():
         print("Failed to load models. Exiting.")
         return
 
-    sequence_length = 30
+    # Get the sequence length from the trial JSON file
+    with open('trial.json', 'r') as f:
+        trial_data = json.load(f)
+    sequence_length = trial_data['hyperparameters']['values']['sequence_length']
+
     X, scaler = prepare_data(df['New_cases'], sequence_length)
 
     lstm_predictions = predict_lstm(lstm_model, X[-1], scaler, sequence_length)
