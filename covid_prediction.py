@@ -30,7 +30,7 @@ def fetch_and_clean_data():
     return df_global
 
 def load_lstm_model():
-    print("Loading LSTM model...")
+    print("Creating LSTM model based on hyperparameters...")
     try:
         # Load the hyperparameters from the trial JSON file
         with open('trial.json', 'r') as f:
@@ -72,13 +72,10 @@ def load_lstm_model():
         model.compile(optimizer=Adam(learning_rate=hyperparameters['learning_rate']),
                       loss='mean_absolute_percentage_error')
         
-        # Load the weights
-        model.load_weights('checkpoint.weights.h5')
-        
-        print("LSTM model loaded successfully.")
+        print("LSTM model created successfully.")
         return model
     except Exception as e:
-        print(f"Error loading LSTM model: {str(e)}")
+        print(f"Error creating LSTM model: {str(e)}")
         return None
 
 def load_arima_model():
