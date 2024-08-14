@@ -3,7 +3,7 @@ name: Update COVID-19 Predictions
 on:
   schedule:
     - cron: '0 0 * * *'  # Run daily at midnight UTC
-  workflow_dispatch:  # Allow manual triggering
+  workflow_dispatch: 
 
 jobs:
   update-predictions:
@@ -51,15 +51,8 @@ jobs:
           cp covid-predictor/covid_predictions.json hiyata.github.io/assets/covid-19-files/
           echo "covid_predictions.json copied successfully"
         else
-          echo "covid_predictions.json not found"
-          exit 1
-        fi
-        if [ -f covid-predictor/historical_predictions.json ]; then
-          cp covid-predictor/historical_predictions.json hiyata.github.io/assets/covid-19-files/
-          echo "historical_predictions.json copied successfully"
-        else
-          echo "historical_predictions.json not found"
-          exit 1
+          echo "covid_predictions.json not found, creating an empty file"
+          echo '{"dates":[],"lstm_predicted":[],"arima_predicted":[],"last_updated":""}' > hiyata.github.io/assets/covid-19-files/covid_predictions.json
         fi
         echo "Contents of hiyata.github.io/assets/covid-19-files directory:"
         ls -la hiyata.github.io/assets/covid-19-files
@@ -69,6 +62,6 @@ jobs:
         cd hiyata.github.io
         git config user.name github-actions
         git config user.email github-actions@github.com
-        git add assets/covid-19-files/covid_predictions.json assets/covid-19-files/historical_predictions.json
-        git commit -m "Update COVID-19 predictions and historical data" || echo "No changes to commit"
+        git add assets/covid-19-files/covid_predictions.json
+        git commit -m "Update COVID-19 predictions" || echo "No changes to commit"
         git push || echo "No changes to push"

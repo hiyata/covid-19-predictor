@@ -8,6 +8,7 @@ from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense
 from tensorflow.keras.models import load_model
+import os
 
 def fetch_and_clean_data():
     print("Fetching and cleaning data...")
@@ -31,18 +32,15 @@ def fetch_and_clean_data():
 def load_lstm_model():
     print("Loading LSTM model...")
     try:
-        # Load the input shape from build_config.json
         with open('build_config.json', 'r') as json_file:
             build_config = json.load(json_file)
         input_shape = tuple(build_config['input_shape'])
         
-        # Create a simple LSTM model based on the input shape
         model = Sequential([
             LSTM(50, activation='relu', input_shape=input_shape[1:]),
             Dense(1)
         ])
         
-        # Load weights
         model.load_weights('checkpoint.weights.h5')
         print("LSTM model loaded successfully.")
         return model
@@ -88,14 +86,23 @@ def predict_arima(model, future_days=7):
     forecast = model.forecast(steps=future_days)
     return forecast
 
+def save_predictions(predictions, filename='covid_predictions.json'):
+    with open(filename, 'w') as f:
+        json.dump(predictions, f)
+    print(f"Predictions saved to {filename}")
+
+def load_predictions(filename='covid_predictions.json'):
+    if os.path.exists(filename):
+        with open(filename, 'r') as f:
+            return json.load(f)
+    return None
+
 def main():
-    # Fetch and prepare data
     df = fetch_and_clean_data()
     if df is None:
         print("Failed to fetch data. Exiting.")
         return
 
-    # Load models
     lstm_model = load_lstm_model()
     arima_model = load_arima_model()
 
@@ -103,30 +110,37 @@ def main():
         print("Failed to load models. Exiting.")
         return
 
-    # Prepare data for LSTM
-    sequence_length = 30  # This should match the sequence_length in build_config.json
+    sequence_length = 30
     X, scaler = prepare_data(df['New_cases'], sequence_length)
 
-    # Make predictions
     lstm_predictions = predict_lstm(lstm_model, X[-1], scaler, sequence_length)
     arima_predictions = predict_arima(arima_model)
 
-    # Prepare results
     last_date = df.index[-1]
     future_dates = [last_date + timedelta(days=i) for i in range(1, 8)]
     
-    results = pd.DataFrame({
-        'Date': future_dates,
-        'LSTM_Predicted': lstm_predictions,
-        'ARIMA_Predicted': arima_predictions
-    })
+    new_predictions = {
+        'dates': [d.strftime('%Y-%m-%d') for d in future_dates],
+        'lstm_predicted': lstm_predictions.tolist(),
+        'arima_predicted': arima_predictions.tolist(),
+        'last_updated': datetime.now().isoformat()
+    }
+
+    existing_predictions = load_predictions()
+    if existing_predictions:
+        # Update existing predictions
+        existing_predictions['dates'] = existing_predictions['dates'][-6:] + new_predictions['dates'][-1:]
+        existing_predictions['lstm_predicted'] = existing_predictions['lstm_predicted'][-6:] + new_predictions['lstm_predicted'][-1:]
+        existing_predictions['arima_predicted'] = existing_predictions['arima_predicted'][-6:] + new_predictions['arima_predicted'][-1:]
+        existing_predictions['last_updated'] = new_predictions['last_updated']
+    else:
+        existing_predictions = new_predictions
+
+    save_predictions(existing_predictions)
 
     print("\n7-day forecast:")
-    print(results.to_string(index=False))
-
-    # Save predictions to a file
-    results.to_csv('covid_predictions.csv', index=False)
-    print("Predictions saved to covid_predictions.csv")
+    for date, lstm, arima in zip(existing_predictions['dates'], existing_predictions['lstm_predicted'], existing_predictions['arima_predicted']):
+        print(f"Date: {date}, LSTM: {lstm:.2f}, ARIMA: {arima:.2f}")
 
 if __name__ == "__main__":
     main()
