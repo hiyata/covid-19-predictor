@@ -5,6 +5,7 @@ import pickle
 from datetime import datetime, timedelta
 import requests
 from tensorflow.keras.models import load_model
+import tensorflow as tf
 import os
 
 def fetch_and_clean_data():
@@ -32,8 +33,14 @@ def fetch_and_clean_data():
 def load_lstm_model():
     print("Loading LSTM model...")
     try:
-        model = load_model('lstm_model.h5')
+        # Custom load function to handle potential incompatibilities
+        def load_model_custom(filepath):
+            model = tf.keras.models.load_model(filepath, compile=False)
+            return model
+
+        model = load_model_custom('lstm_model.h5')
         print("LSTM model loaded successfully.")
+        model.summary()
         return model
     except Exception as e:
         print(f"Error loading LSTM model: {str(e)}")
