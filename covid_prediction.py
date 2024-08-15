@@ -5,7 +5,7 @@ import pickle
 from datetime import datetime, timedelta
 import requests
 from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras.models import Sequential, model_from_json
+from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, GRU, Dense, Dropout, BatchNormalization
 from tensorflow.keras.optimizers import Adam
 import os
@@ -41,32 +41,19 @@ def load_lstm_model():
         # Reconstruct the model based on the hyperparameters
         model = Sequential()
         
-        for i in range(hyperparameters['num_layers']):
-            layer_type = hyperparameters[f'layer_type_{i}']
-            units = hyperparameters[f'units_{i}']
-            dropout = hyperparameters[f'dropout_{i}']
-            normalization = hyperparameters[f'normalization_{i}']
-            
-            if i == 0:
-                input_shape = (hyperparameters['sequence_length'], 1)
-                if layer_type == 'LSTM':
-                    model.add(LSTM(units, activation='relu', input_shape=input_shape, return_sequences=(i < hyperparameters['num_layers'] - 1)))
-                else:  # GRU
-                    model.add(GRU(units, activation='relu', input_shape=input_shape, return_sequences=(i < hyperparameters['num_layers'] - 1)))
-            else:
-                if layer_type == 'LSTM':
-                    model.add(LSTM(units, activation='relu', return_sequences=(i < hyperparameters['num_layers'] - 1)))
-                else:  # GRU
-                    model.add(GRU(units, activation='relu', return_sequences=(i < hyperparameters['num_layers'] - 1)))
-            
-            if normalization:
-                model.add(BatchNormalization())
-            
-            model.add(Dropout(dropout))
+        # Add the GRU layer (as specified in the JSON)
+        model.add(GRU(hyperparameters['units_0'], 
+                      input_shape=(hyperparameters['sequence_length'], 1), 
+                      return_sequences=False))
         
-        for i in range(hyperparameters['num_dense_layers']):
-            model.add(Dense(hyperparameters[f'dense_units_{i}'], activation='relu'))
+        # Add dropout if specified
+        if hyperparameters['dropout_0'] > 0:
+            model.add(Dropout(hyperparameters['dropout_0']))
         
+        # Add the dense layer
+        model.add(Dense(hyperparameters['dense_units_0']))
+        
+        # Add the final output dense layer
         model.add(Dense(1))
         
         # Load the weights
@@ -145,7 +132,7 @@ def main():
         return
 
     # Get the sequence length from the trial JSON file
-    with open('trial_architecture_and_params.json', 'r') as f:
+    with open('trial.json', 'r') as f:
         trial_data = json.load(f)
     sequence_length = trial_data['hyperparameters']['values']['sequence_length']
 
