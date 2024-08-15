@@ -4,8 +4,11 @@ import json
 import pickle
 from datetime import datetime, timedelta
 import requests
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Input, LSTM, GRU, Dense
 from tensorflow.keras.models import load_model
 import os
+import h5py
 
 def fetch_and_clean_data():
     print("Fetching and cleaning data...")
@@ -32,7 +35,35 @@ def fetch_and_clean_data():
 def load_lstm_model():
     print("Loading LSTM model...")
     try:
-        model = load_model('lstm_model.h5')
+        # Load the hyperparameters from the trial JSON file
+        with open('trial.json', 'r') as f:
+            trial_data = json.load(f)
+        
+        hp = trial_data['hyperparameters']['values']
+        
+        # Reconstruct the model based on the hyperparameters
+        inputs = Input(shape=(hp['sequence_length'], 1))
+        x = inputs
+
+        for i in range(hp['num_layers']):
+            layer_type = hp[f'layer_type_{i}']
+            units = hp[f'units_{i}']
+
+            if layer_type == 'LSTM':
+                x = LSTM(units=units, return_sequences=(i < hp['num_layers'] - 1))(x)
+            else:
+                x = GRU(units=units, return_sequences=(i < hp['num_layers'] - 1))(x)
+
+        for i in range(hp['num_dense_layers']):
+            x = Dense(units=hp[f'dense_units_{i}'], activation='relu')(x)
+
+        outputs = Dense(units=1)(x)
+
+        model = Model(inputs=inputs, outputs=outputs)
+
+        # Load weights
+        model.load_weights('lstm_model.h5')
+        
         print("LSTM model loaded successfully.")
         model.summary()  # Print model summary for verification
         return model
