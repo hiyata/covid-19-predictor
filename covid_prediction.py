@@ -14,7 +14,7 @@ from sklearn.preprocessing import MinMaxScaler
 
 def fetch_and_clean_data():
     print("Fetching and cleaning data...")
-    url = "https://covid19.who.int/WHO-COVID-19-global-data.csv"
+    url = "https://srhdpeuwpubsa.blob.core.windows.net/whdh/COVID/WHO-COVID-19-global-data.csv"
     
     try:
         response = requests.get(url)
