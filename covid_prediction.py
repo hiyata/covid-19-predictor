@@ -44,7 +44,7 @@ def fetch_and_clean_data():
     print(f"Data cleaned and interpolated. Shape: {df_global.shape}")
     return df_global
 
-def prepare_data(df, sequence_length=90):
+def prepare_data(df, sequence_length=60):
     data = df['y'].values
     day_of_week = df['day_of_week'].values.reshape(-1, 1)
     scaler = MinMaxScaler(feature_range=(0, 1))
@@ -88,7 +88,7 @@ def create_model(input_shape):
     
     return model
 
-def train_and_predict(df, sequence_length=90):
+def train_and_predict(df, sequence_length=60):
     print("Training model and making predictions...")
     X, y, scaler = prepare_data(df, sequence_length)
     
