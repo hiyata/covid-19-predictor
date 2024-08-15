@@ -5,8 +5,6 @@ import pickle
 from datetime import datetime, timedelta
 import requests
 from tensorflow.keras.models import load_model
-from sklearn.ensemble import RandomForestRegressor
-from xgboost import XGBRegressor
 import os
 
 def fetch_and_clean_data():
@@ -51,26 +49,6 @@ def load_arima_model():
         print(f"Error loading ARIMA model: {str(e)}")
         return None
 
-def load_rf_model():
-    print("Loading Random Forest model...")
-    try:
-        with open('rf_model.pkl', 'rb') as f:
-            model = pickle.load(f)
-        return model
-    except Exception as e:
-        print(f"Error loading Random Forest model: {str(e)}")
-        return None
-
-def load_xgb_model():
-    print("Loading XGBoost model...")
-    try:
-        with open('xgb_model.pkl', 'rb') as f:
-            model = pickle.load(f)
-        return model
-    except Exception as e:
-        print(f"Error loading XGBoost model: {str(e)}")
-        return None
-
 def load_scaler():
     print("Loading scaler...")
     try:
@@ -88,10 +66,9 @@ def prepare_data(data, sequence_length, scaler):
     for i in range(len(scaled_data) - sequence_length):
         X.append(scaled_data[i:i+sequence_length])
     X = np.array(X)
-    X_lstm = np.reshape(X, (X.shape[0], X.shape[1], 1))
-    X_flat = X.reshape(X.shape[0], -1)
+    X = np.reshape(X, (X.shape[0], X.shape[1], 1))
     
-    return X_lstm, X_flat
+    return X
 
 def predict_lstm(model, data, scaler, sequence_length, future_days=7):
     last_sequence = data[-sequence_length:]
@@ -108,30 +85,6 @@ def predict_lstm(model, data, scaler, sequence_length, future_days=7):
 def predict_arima(model, future_days=7):
     forecast = model.forecast(steps=future_days)
     return np.expm1(forecast)  # Reverse log transformation
-
-def predict_rf(model, data, scaler, sequence_length, future_days=7):
-    last_sequence = data[-sequence_length:].flatten()
-    predicted = []
-    
-    for _ in range(future_days):
-        next_pred = model.predict(last_sequence.reshape(1, -1))
-        predicted.append(next_pred[0])
-        last_sequence = np.append(last_sequence[1:], next_pred)
-    
-    predicted = scaler.inverse_transform(np.array(predicted).reshape(-1, 1))
-    return np.expm1(predicted.flatten())  # Reverse log transformation
-
-def predict_xgb(model, data, scaler, sequence_length, future_days=7):
-    last_sequence = data[-sequence_length:].flatten()
-    predicted = []
-    
-    for _ in range(future_days):
-        next_pred = model.predict(last_sequence.reshape(1, -1))
-        predicted.append(next_pred[0])
-        last_sequence = np.append(last_sequence[1:], next_pred)
-    
-    predicted = scaler.inverse_transform(np.array(predicted).reshape(-1, 1))
-    return np.expm1(predicted.flatten())  # Reverse log transformation
 
 def save_predictions(predictions, filename='covid_predictions.json'):
     with open(filename, 'w') as f:
@@ -152,11 +105,9 @@ def main():
 
     lstm_model = load_lstm_model()
     arima_model = load_arima_model()
-    rf_model = load_rf_model()
-    xgb_model = load_xgb_model()
     scaler = load_scaler()
 
-    if lstm_model is None or arima_model is None or rf_model is None or xgb_model is None or scaler is None:
+    if lstm_model is None or arima_model is None or scaler is None:
         print("Failed to load models or scaler. Exiting.")
         return
 
@@ -164,12 +115,10 @@ def main():
         trial_data = json.load(f)
     sequence_length = trial_data['hyperparameters']['values']['sequence_length']
 
-    X_lstm, X_flat = prepare_data(df['New_cases'], sequence_length, scaler)
+    X = prepare_data(df['New_cases'], sequence_length, scaler)
 
-    lstm_predictions = predict_lstm(lstm_model, X_lstm[-1], scaler, sequence_length)
+    lstm_predictions = predict_lstm(lstm_model, X[-1], scaler, sequence_length)
     arima_predictions = predict_arima(arima_model)
-    rf_predictions = predict_rf(rf_model, X_flat[-1], scaler, sequence_length)
-    xgb_predictions = predict_xgb(xgb_model, X_flat[-1], scaler, sequence_length)
 
     last_date = df.index[-1]
     future_dates = [last_date + timedelta(days=i) for i in range(1, 8)]
@@ -178,8 +127,6 @@ def main():
         'dates': [d.strftime('%Y-%m-%d') for d in future_dates],
         'lstm_predicted': lstm_predictions.tolist(),
         'arima_predicted': arima_predictions.tolist(),
-        'rf_predicted': rf_predictions.tolist(),
-        'xgb_predicted': xgb_predictions.tolist(),
         'last_updated': datetime.now().isoformat()
     }
 
@@ -188,8 +135,6 @@ def main():
         existing_predictions['dates'] = existing_predictions['dates'][-6:] + new_predictions['dates'][-1:]
         existing_predictions['lstm_predicted'] = existing_predictions['lstm_predicted'][-6:] + new_predictions['lstm_predicted'][-1:]
         existing_predictions['arima_predicted'] = existing_predictions['arima_predicted'][-6:] + new_predictions['arima_predicted'][-1:]
-        existing_predictions['rf_predicted'] = existing_predictions['rf_predicted'][-6:] + new_predictions['rf_predicted'][-1:]
-        existing_predictions['xgb_predicted'] = existing_predictions['xgb_predicted'][-6:] + new_predictions['xgb_predicted'][-1:]
         existing_predictions['last_updated'] = new_predictions['last_updated']
     else:
         existing_predictions = new_predictions
@@ -197,12 +142,10 @@ def main():
     save_predictions(existing_predictions)
 
     print("\n7-day forecast:")
-    for date, lstm, arima, rf, xgb in zip(existing_predictions['dates'], 
-                                          existing_predictions['lstm_predicted'], 
-                                          existing_predictions['arima_predicted'], 
-                                          existing_predictions['rf_predicted'], 
-                                          existing_predictions['xgb_predicted']):
-        print(f"Date: {date}, LSTM: {lstm:.2f}, ARIMA: {arima:.2f}, RF: {rf:.2f}, XGB: {xgb:.2f}")
+    for date, lstm, arima in zip(existing_predictions['dates'], 
+                                 existing_predictions['lstm_predicted'], 
+                                 existing_predictions['arima_predicted']):
+        print(f"Date: {date}, LSTM: {lstm:.2f}, ARIMA: {arima:.2f}")
 
 if __name__ == "__main__":
     main()
