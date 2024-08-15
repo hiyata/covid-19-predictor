@@ -5,7 +5,8 @@ import pickle
 from datetime import datetime, timedelta
 import requests
 from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras.models import load_model
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, GRU, Dense, Dropout, BatchNormalization, Input
 from tensorflow.keras.optimizers import Adam
 import os
 
@@ -31,17 +32,46 @@ def fetch_and_clean_data():
 def load_lstm_model():
     print("Loading LSTM model...")
     try:
-        # Load the entire model from the HDF5 file
-        model = load_model('checkpoint.weights.h5')
-        
         # Load the hyperparameters from the trial JSON file
         with open('trial.json', 'r') as f:
             trial_data = json.load(f)
         
-        hyperparameters = trial_data['hyperparameters']['values']
+        hp = trial_data['hyperparameters']['values']
         
-        # Update the learning rate
-        model.optimizer.learning_rate.assign(hyperparameters['learning_rate'])
+        # Reconstruct the model based on the hyperparameters
+        model = Sequential()
+        
+        # Input layer
+        model.add(Input(shape=(hp['sequence_length'], 1)))
+
+        for i in range(hp['num_layers']):
+            layer_type = hp[f'layer_type_{i}']
+            units = hp[f'units_{i}']
+
+            if layer_type == 'LSTM':
+                model.add(LSTM(units=units, return_sequences=(i < hp['num_layers'] - 1)))
+            else:
+                model.add(GRU(units=units, return_sequences=(i < hp['num_layers'] - 1)))
+
+            # Optional normalization layer
+            if hp[f'normalization_{i}']:
+                model.add(BatchNormalization())
+
+            # Dropout layer
+            model.add(Dropout(hp[f'dropout_{i}']))
+
+        # Dense layers
+        for i in range(hp['num_dense_layers']):
+            model.add(Dense(units=hp[f'dense_units_{i}']))
+
+        model.add(Dense(units=1))
+
+        # Compile the model
+        model.compile(optimizer=Adam(learning_rate=hp['learning_rate']),
+                      loss='mean_absolute_percentage_error')
+        
+        # Load the weights
+        model.load_weights('checkpoint.weights.h5')
         
         print("LSTM model loaded successfully.")
         model.summary()  # Print model summary for verification
@@ -66,7 +96,7 @@ def prepare_data(data, sequence_length):
     
     X = []
     for i in range(len(scaled_data) - sequence_length):
-        X.append(scaled_data[i:(i + sequence_length), 0])
+        X.append(scaled_data[i:i+sequence_length])
     X = np.array(X)
     X = np.reshape(X, (X.shape[0], X.shape[1], 1))
     
