@@ -109,7 +109,7 @@ def train_and_predict(df, sequence_length=90):
     last_sequence = X[-1:]
     
     future_predictions = []
-    for i in range(14):  # 14 days prediction
+    for i in range(30):  # 30 days prediction
         pred = model.predict(last_sequence)
         future_predictions.append(pred[0, 0])
         next_day_of_week = (last_sequence[0, -1, 1] + 1) % 7
@@ -140,21 +140,21 @@ def main():
         
         print("Preparing data for JSON...")
         last_date = df['ds'].iloc[-1]
-        seven_days_ago = last_date - timedelta(days=7)
+        comparison_start_date = last_date - timedelta(days=23)  # 23 days ago to have a 30-day span
         
         data = {
             'dates': df['ds'].astype(str).tolist(),
             'actual': actual.tolist(),
             'predicted': predicted.tolist(),
-            'comparison_dates': [str(seven_days_ago + timedelta(days=i)) for i in range(14)],
-            'comparison_actual': actual[-7:].tolist() + [None] * 7,  # Last 7 known + 7 unknown
+            'comparison_dates': [str(comparison_start_date + timedelta(days=i)) for i in range(30)],
+            'comparison_actual': actual[-23:].tolist() + [None] * 30,  # Last 23 known + 30 unknown
             'comparison_predicted': future_predictions.tolist(),
             'future_dates': [str(last_date + timedelta(days=i)) for i in range(1, 8)],
-            'future_predicted': future_predictions[7:].tolist()
+            'future_predicted': future_predictions[-7:].tolist()
         }
         
         print("Calculating metrics...")
-        mae, rmse, mape = calculate_metrics(actual[-7:], future_predictions[:7])  # Use last 7 days for metrics
+        mae, rmse, mape = calculate_metrics(actual[-23:], future_predictions[:23])  # Use last 23 days for metrics
         
         data['mae'] = float(mae)
         data['rmse'] = float(rmse)
