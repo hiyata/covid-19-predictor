@@ -5,7 +5,7 @@ import pickle
 from datetime import datetime, timedelta
 import requests
 from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras.models import Sequential, load_model
+from tensorflow.keras.models import Sequential, model_from_json
 from tensorflow.keras.layers import LSTM, GRU, Dense, Dropout, BatchNormalization
 from tensorflow.keras.optimizers import Adam
 import os
@@ -32,17 +32,49 @@ def fetch_and_clean_data():
 def load_lstm_model():
     print("Loading LSTM model...")
     try:
-        # Load the model architecture and weights
-        model = load_model('checkpoint.weights.h5')
-        
         # Load the hyperparameters from the trial JSON file
         with open('trial.json', 'r') as f:
             trial_data = json.load(f)
         
         hyperparameters = trial_data['hyperparameters']['values']
         
-        # Update the learning rate
-        model.optimizer.learning_rate.assign(hyperparameters['learning_rate'])
+        # Reconstruct the model based on the hyperparameters
+        model = Sequential()
+        
+        for i in range(hyperparameters['num_layers']):
+            layer_type = hyperparameters[f'layer_type_{i}']
+            units = hyperparameters[f'units_{i}']
+            dropout = hyperparameters[f'dropout_{i}']
+            normalization = hyperparameters[f'normalization_{i}']
+            
+            if i == 0:
+                input_shape = (hyperparameters['sequence_length'], 1)
+                if layer_type == 'LSTM':
+                    model.add(LSTM(units, activation='relu', input_shape=input_shape, return_sequences=(i < hyperparameters['num_layers'] - 1)))
+                else:  # GRU
+                    model.add(GRU(units, activation='relu', input_shape=input_shape, return_sequences=(i < hyperparameters['num_layers'] - 1)))
+            else:
+                if layer_type == 'LSTM':
+                    model.add(LSTM(units, activation='relu', return_sequences=(i < hyperparameters['num_layers'] - 1)))
+                else:  # GRU
+                    model.add(GRU(units, activation='relu', return_sequences=(i < hyperparameters['num_layers'] - 1)))
+            
+            if normalization:
+                model.add(BatchNormalization())
+            
+            model.add(Dropout(dropout))
+        
+        for i in range(hyperparameters['num_dense_layers']):
+            model.add(Dense(hyperparameters[f'dense_units_{i}'], activation='relu'))
+        
+        model.add(Dense(1))
+        
+        # Load the weights
+        model.load_weights('checkpoint.weights.h5')
+        
+        # Compile the model
+        model.compile(optimizer=Adam(learning_rate=hyperparameters['learning_rate']),
+                      loss='mean_absolute_percentage_error')
         
         print("LSTM model loaded successfully.")
         return model
