@@ -4,10 +4,7 @@ import json
 import pickle
 from datetime import datetime, timedelta
 import requests
-from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, GRU, Dense, Dropout, BatchNormalization, Input
-from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.models import load_model
 import os
 
 def fetch_and_clean_data():
@@ -26,53 +23,16 @@ def fetch_and_clean_data():
     df_global['Date_reported'] = pd.to_datetime(df_global['Date_reported'])
     df_global.set_index('Date_reported', inplace=True)
     
+    # Apply log transformation
+    df_global['New_cases'] = np.log1p(df_global['New_cases'])
+    
     print(f"Data cleaned. Shape: {df_global.shape}")
     return df_global
 
 def load_lstm_model():
     print("Loading LSTM model...")
     try:
-        # Load the hyperparameters from the trial JSON file
-        with open('trial.json', 'r') as f:
-            trial_data = json.load(f)
-        
-        hp = trial_data['hyperparameters']['values']
-        
-        # Reconstruct the model based on the hyperparameters
-        model = Sequential()
-        
-        # Input layer
-        model.add(Input(shape=(hp['sequence_length'], 1)))
-
-        for i in range(hp['num_layers']):
-            layer_type = hp[f'layer_type_{i}']
-            units = hp[f'units_{i}']
-
-            if layer_type == 'LSTM':
-                model.add(LSTM(units=units, return_sequences=(i < hp['num_layers'] - 1)))
-            else:
-                model.add(GRU(units=units, return_sequences=(i < hp['num_layers'] - 1)))
-
-            # Optional normalization layer
-            if hp[f'normalization_{i}']:
-                model.add(BatchNormalization())
-
-            # Dropout layer
-            model.add(Dropout(hp[f'dropout_{i}']))
-
-        # Dense layers
-        for i in range(hp['num_dense_layers']):
-            model.add(Dense(units=hp[f'dense_units_{i}']))
-
-        model.add(Dense(units=1))
-
-        # Compile the model
-        model.compile(optimizer=Adam(learning_rate=hp['learning_rate']),
-                      loss='mean_absolute_percentage_error')
-        
-        # Load the weights
-        model.load_weights('checkpoint.weights.h5')
-        
+        model = load_model('lstm_model.h5')
         print("LSTM model loaded successfully.")
         model.summary()  # Print model summary for verification
         return model
@@ -90,9 +50,18 @@ def load_arima_model():
         print(f"Error loading ARIMA model: {str(e)}")
         return None
 
-def prepare_data(data, sequence_length):
-    scaler = MinMaxScaler(feature_range=(0, 1))
-    scaled_data = scaler.fit_transform(data.values.reshape(-1, 1))
+def load_scaler():
+    print("Loading scaler...")
+    try:
+        with open('scaler.pkl', 'rb') as f:
+            scaler = pickle.load(f)
+        return scaler
+    except Exception as e:
+        print(f"Error loading scaler: {str(e)}")
+        return None
+
+def prepare_data(data, sequence_length, scaler):
+    scaled_data = scaler.transform(data.values.reshape(-1, 1))
     
     X = []
     for i in range(len(scaled_data) - sequence_length):
@@ -100,7 +69,7 @@ def prepare_data(data, sequence_length):
     X = np.array(X)
     X = np.reshape(X, (X.shape[0], X.shape[1], 1))
     
-    return X, scaler
+    return X
 
 def predict_lstm(model, data, scaler, sequence_length, future_days=7):
     last_sequence = data[-sequence_length:]
@@ -112,11 +81,11 @@ def predict_lstm(model, data, scaler, sequence_length, future_days=7):
         last_sequence = np.append(last_sequence[1:], next_pred)
     
     predicted = scaler.inverse_transform(np.array(predicted).reshape(-1, 1))
-    return predicted.flatten()
+    return np.expm1(predicted.flatten())  # Reverse log transformation
 
 def predict_arima(model, future_days=7):
     forecast = model.forecast(steps=future_days)
-    return forecast
+    return np.expm1(forecast)  # Reverse log transformation
 
 def save_predictions(predictions, filename='covid_predictions.json'):
     with open(filename, 'w') as f:
@@ -137,9 +106,10 @@ def main():
 
     lstm_model = load_lstm_model()
     arima_model = load_arima_model()
+    scaler = load_scaler()
 
-    if lstm_model is None or arima_model is None:
-        print("Failed to load models. Exiting.")
+    if lstm_model is None or arima_model is None or scaler is None:
+        print("Failed to load models or scaler. Exiting.")
         return
 
     # Get the sequence length from the trial JSON file
@@ -147,7 +117,7 @@ def main():
         trial_data = json.load(f)
     sequence_length = trial_data['hyperparameters']['values']['sequence_length']
 
-    X, scaler = prepare_data(df['New_cases'], sequence_length)
+    X = prepare_data(df['New_cases'], sequence_length, scaler)
 
     lstm_predictions = predict_lstm(lstm_model, X[-1], scaler, sequence_length)
     arima_predictions = predict_arima(arima_model)
