@@ -8,13 +8,13 @@ import traceback
 import requests
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, GRU, Conv1D, MaxPooling1D, Flatten, Dense
+from tensorflow.keras.layers import GRU, LSTM, Dense, Dropout, BatchNormalization
 from tensorflow.keras.callbacks import EarlyStopping
 from sklearn.preprocessing import MinMaxScaler
 
 def fetch_and_clean_data():
     print("Fetching and cleaning data...")
-    url = "https://srhdpeuwpubsa.blob.core.windows.net/whdh/COVID/WHO-COVID-19-global-data.csv"
+    url = "https://covid19.who.int/WHO-COVID-19-global-data.csv"
     
     try:
         response = requests.get(url)
@@ -44,7 +44,7 @@ def fetch_and_clean_data():
     print(f"Data cleaned and interpolated. Shape: {df_global.shape}")
     return df_global
 
-def prepare_data(df, look_back=15):
+def prepare_data(df, sequence_length=90):
     data = df['y'].values
     day_of_week = df['day_of_week'].values.reshape(-1, 1)
     scaler = MinMaxScaler(feature_range=(0, 1))
@@ -54,58 +54,72 @@ def prepare_data(df, look_back=15):
     data = scaler.fit_transform(data.reshape(-1, 1))
     
     X, y = [], []
-    for i in range(len(data) - look_back - 1):
-        combined_features = np.hstack((data[i:(i + look_back)], day_of_week[i:(i + look_back)]))
-        X.append(combined_features)
-        y.append(data[i + look_back, 0])
+    for i in range(len(data) - sequence_length):
+        X.append(np.hstack((data[i:i+sequence_length], day_of_week[i:i+sequence_length])))
+        y.append(data[i+sequence_length, 0])
     
     X = np.array(X)
     y = np.array(y)
     return X, y, scaler
 
-def train_and_predict_hybrid(df, look_back=15):
-    print("Training hybrid model and making predictions...")
-    X, y, scaler = prepare_data(df, look_back)
-    
-    X = np.reshape(X, (X.shape[0], X.shape[1], X.shape[2]))
-    
+def create_model(input_shape):
     model = Sequential()
-    model.add(Conv1D(filters=64, kernel_size=2, activation='relu', input_shape=(look_back, X.shape[2])))
-    model.add(MaxPooling1D(pool_size=2))
-    model.add(Flatten())
-    model.add(Dense(50, activation='relu'))
-    model.add(tf.keras.layers.Reshape((50, 1)))
-    model.add(LSTM(50, return_sequences=True))
-    model.add(GRU(50))
+    
+    # Layer 0: GRU
+    model.add(GRU(40, input_shape=input_shape, return_sequences=True))
+    model.add(Dropout(0.1))
+    
+    # Layer 1: LSTM
+    model.add(LSTM(20, return_sequences=True))
+    model.add(BatchNormalization())
+    
+    # Layer 2: GRU
+    model.add(GRU(90))
+    model.add(BatchNormalization())
+    model.add(Dropout(0.4))
+    
+    # Dense layers
+    model.add(Dense(40, activation='relu'))
+    model.add(Dense(100, activation='relu'))
+    model.add(Dense(70, activation='relu'))
+    
+    # Output layer
     model.add(Dense(1))
     
-    model.compile(loss='mean_squared_error', optimizer='adam')
+    return model
+
+def train_and_predict(df, sequence_length=90):
+    print("Training model and making predictions...")
+    X, y, scaler = prepare_data(df, sequence_length)
     
-    early_stopping = EarlyStopping(monitor='loss', patience=5)
-    model.fit(X, y, epochs=50, batch_size=32, verbose=2, callbacks=[early_stopping])
+    model = create_model((X.shape[1], X.shape[2]))
+    
+    optimizer = tf.keras.optimizers.Adam(learning_rate=0.0007919746988842461)
+    model.compile(loss='mean_squared_error', optimizer=optimizer)
+    
+    early_stopping = EarlyStopping(monitor='loss', patience=10)
+    model.fit(X, y, epochs=60, batch_size=32, verbose=2, callbacks=[early_stopping])
     
     # Make predictions for known dates
     known_predictions = model.predict(X)
     known_predictions = scaler.inverse_transform(known_predictions).flatten()
     known_predictions = np.expm1(known_predictions)
     
-    # Prepare data for future predictions (14 days from 7 days ago)
-    future_X = X[-8:-7]  # Start from 7 days ago
-    future_day_of_week = df['day_of_week'].values[-8-look_back:-8].reshape(-1, 1)
+    # Prepare data for future predictions
+    last_sequence = X[-1:]
     
     future_predictions = []
-    for i in range(14):
-        pred = model.predict(future_X)
+    for i in range(14):  # 14 days prediction
+        pred = model.predict(last_sequence)
         future_predictions.append(pred[0, 0])
-        next_day_of_week = (future_day_of_week[-1] + 1) % 7
-        pred_reshaped = np.hstack((pred.reshape(1, 1), next_day_of_week.reshape(1, 1)))
-        future_X = np.concatenate((future_X[:, 1:, :], pred_reshaped.reshape(1, 1, 2)), axis=1)
-        future_day_of_week = np.append(future_day_of_week[1:], next_day_of_week)
+        next_day_of_week = (last_sequence[0, -1, 1] + 1) % 7
+        new_data_point = np.hstack((pred, [[next_day_of_week]]))
+        last_sequence = np.concatenate((last_sequence[:, 1:, :], new_data_point.reshape(1, 1, 2)), axis=1)
     
     future_predictions = scaler.inverse_transform(np.array(future_predictions).reshape(-1, 1))
     future_predictions = np.expm1(future_predictions).flatten()
     
-    print("Hybrid model training and prediction complete.")
+    print("Model training and prediction complete.")
     return known_predictions, future_predictions
 
 def calculate_metrics(actual, predicted):
@@ -118,7 +132,7 @@ def main():
     try:
         print("Starting main function...")
         df = fetch_and_clean_data()
-        known_predictions, future_predictions = train_and_predict_hybrid(df)
+        known_predictions, future_predictions = train_and_predict(df)
         
         # Separate actual and predicted data
         actual = df['y'].values
