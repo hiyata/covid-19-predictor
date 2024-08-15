@@ -4,9 +4,8 @@ import json
 import pickle
 from datetime import datetime, timedelta
 import requests
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Input, LSTM, GRU, Dense
 import os
+from tensorflow.keras.models import load_model
 
 def fetch_and_clean_data():
     print("Fetching and cleaning data...")
@@ -30,60 +29,18 @@ def fetch_and_clean_data():
     print(f"Data cleaned. Shape: {df_global.shape}")
     return df_global
 
-def load_lstm_model():
-    print("Loading LSTM model...")
-    try:
-        with open('trial.json', 'r') as f:
-            trial_data = json.load(f)
-        
-        hp = trial_data['hyperparameters']['values']
-        
-        inputs = Input(shape=(hp['sequence_length'], 1))
-        x = inputs
-
-        for i in range(hp['num_layers']):
-            layer_type = hp[f'layer_type_{i}']
-            units = hp[f'units_{i}']
-
-            if layer_type == 'LSTM':
-                x = LSTM(units=units, return_sequences=(i < hp['num_layers'] - 1))(x)
-            else:
-                x = GRU(units=units, return_sequences=(i < hp['num_layers'] - 1))(x)
-
-        for i in range(hp['num_dense_layers']):
-            x = Dense(units=hp[f'dense_units_{i}'], activation='relu')(x)
-
-        outputs = Dense(units=1)(x)
-
-        model = Model(inputs=inputs, outputs=outputs)
-        model.load_weights('lstm_model.h5')
-        
-        print("LSTM model loaded successfully.")
-        model.summary()
-        return model
-    except Exception as e:
-        print(f"Error loading LSTM model: {str(e)}")
-        return None
-
-def load_arima_model():
-    print("Loading ARIMA model...")
-    try:
-        with open('quick_arima_model.pkl', 'rb') as f:
-            model = pickle.load(f)
-        return model
-    except Exception as e:
-        print(f"Error loading ARIMA model: {str(e)}")
-        return None
-
-def load_scaler():
-    print("Loading scaler...")
-    try:
-        with open('scaler.pkl', 'rb') as f:
-            scaler = pickle.load(f)
-        return scaler
-    except Exception as e:
-        print(f"Error loading scaler: {str(e)}")
-        return None
+def load_models():
+    print("Loading models...")
+    lstm_model = load_model('lstm_model.h5')
+    
+    with open('quick_arima_model.pkl', 'rb') as f:
+        arima_model = pickle.load(f)
+    
+    with open('scaler.pkl', 'rb') as f:
+        scaler = pickle.load(f)
+    
+    print("Models loaded successfully.")
+    return lstm_model, arima_model, scaler
 
 def prepare_data(data, sequence_length, scaler):
     scaled_data = scaler.transform(data.values.reshape(-1, 1))
@@ -129,13 +86,7 @@ def main():
         print("Failed to fetch data. Exiting.")
         return
 
-    lstm_model = load_lstm_model()
-    arima_model = load_arima_model()
-    scaler = load_scaler()
-
-    if lstm_model is None or arima_model is None or scaler is None:
-        print("Failed to load models or scaler. Exiting.")
-        return
+    lstm_model, arima_model, scaler = load_models()
 
     with open('trial.json', 'r') as f:
         trial_data = json.load(f)
@@ -168,7 +119,9 @@ def main():
     save_predictions(existing_predictions)
 
     print("\n7-day forecast:")
-    for date, lstm, arima in zip(existing_predictions['dates'], existing_predictions['lstm_predicted'], existing_predictions['arima_predicted']):
+    for date, lstm, arima in zip(existing_predictions['dates'], 
+                                 existing_predictions['lstm_predicted'], 
+                                 existing_predictions['arima_predicted']):
         print(f"Date: {date}, LSTM: {lstm:.2f}, ARIMA: {arima:.2f}")
 
 if __name__ == "__main__":
