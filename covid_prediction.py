@@ -5,8 +5,7 @@ import pickle
 from datetime import datetime, timedelta
 import requests
 from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, GRU, Dense, Dropout, BatchNormalization
+from tensorflow.keras.models import load_model
 from tensorflow.keras.optimizers import Adam
 import os
 
@@ -32,38 +31,20 @@ def fetch_and_clean_data():
 def load_lstm_model():
     print("Loading LSTM model...")
     try:
+        # Load the entire model from the HDF5 file
+        model = load_model('checkpoint.weights.h5')
+        
         # Load the hyperparameters from the trial JSON file
         with open('trial.json', 'r') as f:
             trial_data = json.load(f)
         
         hyperparameters = trial_data['hyperparameters']['values']
         
-        # Reconstruct the model based on the hyperparameters
-        model = Sequential()
-        
-        # Add the GRU layer (as specified in the JSON)
-        model.add(GRU(hyperparameters['units_0'], 
-                      input_shape=(hyperparameters['sequence_length'], 1), 
-                      return_sequences=False))
-        
-        # Add dropout if specified
-        if hyperparameters['dropout_0'] > 0:
-            model.add(Dropout(hyperparameters['dropout_0']))
-        
-        # Add the dense layer
-        model.add(Dense(hyperparameters['dense_units_0']))
-        
-        # Add the final output dense layer
-        model.add(Dense(1))
-        
-        # Load the weights
-        model.load_weights('checkpoint.weights.h5')
-        
-        # Compile the model
-        model.compile(optimizer=Adam(learning_rate=hyperparameters['learning_rate']),
-                      loss='mean_absolute_percentage_error')
+        # Update the learning rate
+        model.optimizer.learning_rate.assign(hyperparameters['learning_rate'])
         
         print("LSTM model loaded successfully.")
+        model.summary()  # Print model summary for verification
         return model
     except Exception as e:
         print(f"Error loading LSTM model: {str(e)}")
