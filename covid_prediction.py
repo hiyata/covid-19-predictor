@@ -4,9 +4,9 @@ import json
 import pickle
 from datetime import datetime, timedelta
 import requests
+from tensorflow.keras.models import load_model
+from sklearn.preprocessing import MinMaxScaler
 import tensorflow as tf
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Input, LSTM, GRU, Dense, Dropout, BatchNormalization
 import os
 
 def fetch_and_clean_data():
@@ -31,43 +31,10 @@ def fetch_and_clean_data():
     print(f"Data cleaned. Shape: {df_global.shape}")
     return df_global
 
-def build_lstm_model(hp):
-    inputs = Input(shape=(hp['sequence_length'], 1))
-    x = inputs
-
-    for i in range(hp['num_layers']):
-        layer_type = hp[f'layer_type_{i}']
-        units = hp[f'units_{i}']
-
-        if layer_type == 'LSTM':
-            x = LSTM(units=units, return_sequences=(i < hp['num_layers'] - 1))(x)
-        else:
-            x = GRU(units=units, return_sequences=(i < hp['num_layers'] - 1))(x)
-
-        if hp.get(f'normalization_{i}', False):
-            x = BatchNormalization()(x)
-        
-        x = Dropout(hp[f'dropout_{i}'])(x)
-
-    for i in range(hp['num_dense_layers']):
-        x = Dense(units=hp[f'dense_units_{i}'], activation='relu')(x)
-
-    outputs = Dense(units=1)(x)
-
-    model = Model(inputs=inputs, outputs=outputs)
-    model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=hp['learning_rate']),
-                  loss='mean_absolute_percentage_error')
-    return model
-
 def load_lstm_model():
     print("Loading LSTM model...")
     try:
-        with open('trial.json', 'r') as f:
-            trial_data = json.load(f)
-        
-        hp = trial_data['hyperparameters']['values']
-        model = build_lstm_model(hp)
-        model.load_weights('lstm_model.h5')
+        model = load_model('lstm_model.h5', compile=False)
         print("LSTM model loaded successfully.")
         model.summary()
         return model
