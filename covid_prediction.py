@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 import requests
 from tensorflow.keras.models import load_model
 from sklearn.preprocessing import MinMaxScaler
-import tensorflow as tf
+import matplotlib.pyplot as plt
 import os
 
 def fetch_and_clean_data():
@@ -34,9 +34,8 @@ def fetch_and_clean_data():
 def load_lstm_model():
     print("Loading LSTM model...")
     try:
-        model = load_model('lstm_model.h5', compile=False)
+        model = load_model('lstm_model.h5')
         print("LSTM model loaded successfully.")
-        model.summary()
         return model
     except Exception as e:
         print(f"Error loading LSTM model: {str(e)}")
@@ -45,7 +44,7 @@ def load_lstm_model():
 def load_arima_model():
     print("Loading ARIMA model...")
     try:
-        with open('quick_arima_model.pkl', 'rb') as f:
+        with open('arima_model.pkl', 'rb') as f:
             model = pickle.load(f)
         return model
     except Exception as e:
@@ -60,6 +59,16 @@ def load_scaler():
         return scaler
     except Exception as e:
         print(f"Error loading scaler: {str(e)}")
+        return None
+
+def load_hyperparameters():
+    print("Loading hyperparameters...")
+    try:
+        with open('hyperparameters.json', 'r') as f:
+            hyperparameters = json.load(f)
+        return hyperparameters
+    except Exception as e:
+        print(f"Error loading hyperparameters: {str(e)}")
         return None
 
 def prepare_data(data, sequence_length, scaler):
@@ -100,6 +109,21 @@ def load_predictions(filename='covid_predictions.json'):
             return json.load(f)
     return None
 
+def plot_predictions(dates, actual, lstm_pred, arima_pred):
+    plt.figure(figsize=(12, 6))
+    plt.plot(dates, actual, label='Actual', marker='o')
+    plt.plot(dates, lstm_pred, label='LSTM Prediction', marker='s')
+    plt.plot(dates, arima_pred, label='ARIMA Prediction', marker='^')
+    plt.title('COVID-19 New Cases: Actual vs Predicted')
+    plt.xlabel('Date')
+    plt.ylabel('New Cases')
+    plt.legend()
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.savefig('prediction_plot.png')
+    plt.close()
+    print("Prediction plot saved as 'prediction_plot.png'")
+
 def main():
     df = fetch_and_clean_data()
     if df is None:
@@ -109,14 +133,13 @@ def main():
     lstm_model = load_lstm_model()
     arima_model = load_arima_model()
     scaler = load_scaler()
+    hyperparameters = load_hyperparameters()
 
-    if lstm_model is None or arima_model is None or scaler is None:
-        print("Failed to load models or scaler. Exiting.")
+    if lstm_model is None or arima_model is None or scaler is None or hyperparameters is None:
+        print("Failed to load models, scaler, or hyperparameters. Exiting.")
         return
 
-    with open('trial.json', 'r') as f:
-        trial_data = json.load(f)
-    sequence_length = trial_data['hyperparameters']['values']['sequence_length']
+    sequence_length = hyperparameters['hyperparameters']['values']['sequence_length']
 
     X = prepare_data(df['New_cases'], sequence_length, scaler)
 
@@ -149,6 +172,13 @@ def main():
                                  existing_predictions['lstm_predicted'], 
                                  existing_predictions['arima_predicted']):
         print(f"Date: {date}, LSTM: {lstm:.2f}, ARIMA: {arima:.2f}")
+
+    # Plot the predictions
+    plot_dates = pd.to_datetime(existing_predictions['dates'])
+    actual_cases = np.expm1(df['New_cases'].iloc[-7:].values)
+    plot_predictions(plot_dates, actual_cases, 
+                     existing_predictions['lstm_predicted'], 
+                     existing_predictions['arima_predicted'])
 
 if __name__ == "__main__":
     main()
