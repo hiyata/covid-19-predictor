@@ -6,9 +6,7 @@ from datetime import datetime, timedelta
 import requests
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Input, LSTM, GRU, Dense
-from tensorflow.keras.models import load_model
 import os
-import h5py
 
 def fetch_and_clean_data():
     print("Fetching and cleaning data...")
@@ -35,13 +33,11 @@ def fetch_and_clean_data():
 def load_lstm_model():
     print("Loading LSTM model...")
     try:
-        # Load the hyperparameters from the trial JSON file
         with open('trial.json', 'r') as f:
             trial_data = json.load(f)
         
         hp = trial_data['hyperparameters']['values']
         
-        # Reconstruct the model based on the hyperparameters
         inputs = Input(shape=(hp['sequence_length'], 1))
         x = inputs
 
@@ -60,12 +56,10 @@ def load_lstm_model():
         outputs = Dense(units=1)(x)
 
         model = Model(inputs=inputs, outputs=outputs)
-
-        # Load weights
         model.load_weights('lstm_model.h5')
         
         print("LSTM model loaded successfully.")
-        model.summary()  # Print model summary for verification
+        model.summary()
         return model
     except Exception as e:
         print(f"Error loading LSTM model: {str(e)}")
@@ -143,7 +137,6 @@ def main():
         print("Failed to load models or scaler. Exiting.")
         return
 
-    # Get the sequence length from the trial JSON file
     with open('trial.json', 'r') as f:
         trial_data = json.load(f)
     sequence_length = trial_data['hyperparameters']['values']['sequence_length']
@@ -165,7 +158,6 @@ def main():
 
     existing_predictions = load_predictions()
     if existing_predictions:
-        # Update existing predictions
         existing_predictions['dates'] = existing_predictions['dates'][-6:] + new_predictions['dates'][-1:]
         existing_predictions['lstm_predicted'] = existing_predictions['lstm_predicted'][-6:] + new_predictions['lstm_predicted'][-1:]
         existing_predictions['arima_predicted'] = existing_predictions['arima_predicted'][-6:] + new_predictions['arima_predicted'][-1:]
