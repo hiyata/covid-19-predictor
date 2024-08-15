@@ -8,65 +8,40 @@ import traceback
 import requests
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import GRU, LSTM, Dense, Dropout, BatchNormalization
+from tensorflow.keras.layers import GRU, LSTM, Dense, Dropout, BatchNormalization, Input
 from tensorflow.keras.callbacks import EarlyStopping
 from sklearn.preprocessing import MinMaxScaler
+from statsmodels.tsa.arima.model import ARIMA
+from sklearn.ensemble import RandomForestRegressor
+from xgboost import XGBRegressor
 
-def fetch_and_clean_data():
-    print("Fetching and cleaning data...")
+def preprocess_and_prepare_dataset():
+    print("Fetching and preprocessing data...")
     url = "https://srhdpeuwpubsa.blob.core.windows.net/whdh/COVID/WHO-COVID-19-global-data.csv"
-    
-    try:
-        response = requests.get(url)
-        response.raise_for_status()
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching data: {e}")
-        sys.exit(1)
-    
-    df = pd.read_csv(url)
-    
-    # Aggregate global daily cases
-    df_global = df.groupby('Date_reported')['New_cases'].sum().reset_index()
-    df_global.columns = ['ds', 'y']
-    df_global['ds'] = pd.to_datetime(df_global['ds'])
-    
-    # Add day of the week as a feature
-    df_global['day_of_week'] = df_global['ds'].dt.dayofweek
-    
-    # Fill missing dates and interpolate values
-    full_range = pd.date_range(start=df_global['ds'].min(), end=df_global['ds'].max(), freq='D')
-    df_global = df_global.set_index('ds').reindex(full_range).reset_index().rename(columns={'index': 'ds'})
-    df_global['y'] = df_global['y'].interpolate(method='linear')
-    
-    # Add day of the week for the filled dates
-    df_global['day_of_week'] = df_global['ds'].dt.dayofweek
-    
-    print(f"Data cleaned and interpolated. Shape: {df_global.shape}")
-    return df_global
-
-def prepare_data(df, sequence_length=60):
-    data = df['y'].values
-    day_of_week = df['day_of_week'].values.reshape(-1, 1)
+    data = pd.read_csv(url)
+    data['Date_reported'] = pd.to_datetime(data['Date_reported'])
+    global_data = data.groupby('Date_reported').agg({'New_cases': 'sum'}).reset_index()
+    global_data['New_cases'] = np.log1p(global_data['New_cases'])
     scaler = MinMaxScaler(feature_range=(0, 1))
-    
-    # Apply log transformation to stabilize variance
-    data = np.log1p(data)
-    data = scaler.fit_transform(data.reshape(-1, 1))
-    
+    global_data['New_cases'] = scaler.fit_transform(global_data['New_cases'].values.reshape(-1, 1))
+    return global_data, scaler
+
+def create_features(data, sequence_length):
     X, y = [], []
     for i in range(len(data) - sequence_length):
-        X.append(np.hstack((data[i:i+sequence_length], day_of_week[i:i+sequence_length])))
-        y.append(data[i+sequence_length, 0])
-    
-    X = np.array(X)
-    y = np.array(y)
-    return X, y, scaler
+        X.append(data[i:i+sequence_length])
+        y.append(data[i+sequence_length])
+    X, y = np.array(X), np.array(y)
+    X_flat = X.reshape(X.shape[0], -1)
+    X = np.reshape(X, (X.shape[0], X.shape[1], 1))
+    return X, X_flat, y
 
-def create_model(input_shape):
+def create_model(sequence_length):
     model = Sequential()
+    model.add(Input(shape=(sequence_length, 1)))
     
     # Layer 0: GRU
-    model.add(GRU(40, input_shape=input_shape, return_sequences=True))
+    model.add(GRU(40, return_sequences=True))
     model.add(Dropout(0.1))
     
     # Layer 1: LSTM
@@ -86,80 +61,92 @@ def create_model(input_shape):
     # Output layer
     model.add(Dense(1))
     
-    return model
-
-def train_and_predict(df, sequence_length=60):
-    print("Training model and making predictions...")
-    X, y, scaler = prepare_data(df, sequence_length)
-    
-    model = create_model((X.shape[1], X.shape[2]))
-    
     optimizer = tf.keras.optimizers.Adam(learning_rate=0.0007919746988842461)
     model.compile(loss='mean_absolute_percentage_error', optimizer=optimizer)
     
-    early_stopping = EarlyStopping(monitor='loss', patience=10)
-    model.fit(X, y, epochs=60, batch_size=32, verbose=2, callbacks=[early_stopping])
-    
-    # Make predictions for known dates
-    known_predictions = model.predict(X)
-    known_predictions = scaler.inverse_transform(known_predictions).flatten()
-    known_predictions = np.expm1(known_predictions)
-    
-    # Prepare data for future predictions
-    last_sequence = X[-1:]
-    
-    future_predictions = []
-    for i in range(67):  # 67 days prediction (60 for comparison + 7 for future)
-        pred = model.predict(last_sequence)
-        future_predictions.append(pred[0, 0])
-        next_day_of_week = (last_sequence[0, -1, 1] + 1) % 7
-        new_data_point = np.hstack((pred, [[next_day_of_week]]))
-        last_sequence = np.concatenate((last_sequence[:, 1:, :], new_data_point.reshape(1, 1, 2)), axis=1)
-    
-    future_predictions = scaler.inverse_transform(np.array(future_predictions).reshape(-1, 1))
-    future_predictions = np.expm1(future_predictions).flatten()
-    
-    print("Model training and prediction complete.")
-    return known_predictions, future_predictions
+    return model
 
-def calculate_metrics(actual, predicted):
-    mae = np.mean(np.abs(actual - predicted))
-    rmse = np.sqrt(np.mean((actual - predicted)**2))
-    mape = np.mean(np.abs((actual - predicted) / actual)) * 100
-    return mae, rmse, mape
+def train_and_predict_lstm_gru(X, y, X_test):
+    model = create_model(X.shape[1])
+    early_stopping = EarlyStopping(monitor='val_loss', patience=10)
+    model.fit(X, y, epochs=60, batch_size=32, validation_split=0.2, callbacks=[early_stopping], verbose=2)
+    predictions = model.predict(X_test)
+    return predictions.flatten()
+
+def train_and_predict_arima(train, test_length):
+    model = ARIMA(train, order=(5,1,0))
+    model_fit = model.fit()
+    predictions = model_fit.forecast(steps=test_length)
+    return predictions
+
+def train_and_predict_random_forest(X_train, y_train, X_test):
+    model = RandomForestRegressor(n_estimators=100)
+    model.fit(X_train, y_train)
+    predictions = model.predict(X_test)
+    return predictions
+
+def train_and_predict_xgboost(X_train, y_train, X_test):
+    model = XGBRegressor(objective='reg:squarederror')
+    model.fit(X_train, y_train)
+    predictions = model.predict(X_test)
+    return predictions
+
+def calculate_mape(actual, predicted):
+    return np.mean(np.abs((actual - predicted) / actual)) * 100
 
 def main():
     try:
         print("Starting main function...")
-        df = fetch_and_clean_data()
-        known_predictions, future_predictions = train_and_predict(df)
+        global_data, scaler = preprocess_and_prepare_dataset()
+        sequence_length = 90  # As per the provided hyperparameters
         
-        # Separate actual and predicted data
-        actual = df['y'].values
-        predicted = known_predictions[:len(actual)]  # Predictions for known dates
+        X, X_flat, y = create_features(global_data['New_cases'].values, sequence_length)
         
-        print("Preparing data for JSON...")
-        last_date = df['ds'].iloc[-1]
-        sixty_days_ago = last_date - timedelta(days=60)
+        # Use the last 14 days for testing
+        test_size = 14
+        X_train, X_test = X[:-test_size], X[-test_size:]
+        X_flat_train, X_flat_test = X_flat[:-test_size], X_flat[-test_size:]
+        y_train, y_test = y[:-test_size], y[-test_size:]
+        
+        # Train and predict using LSTM/GRU model
+        lstm_gru_predictions = train_and_predict_lstm_gru(X_train, y_train, X_test)
+        
+        # Train and predict using ARIMA model
+        arima_predictions = train_and_predict_arima(global_data['New_cases'].values[:-test_size], test_size)
+        
+        # Train and predict using Random Forest
+        rf_predictions = train_and_predict_random_forest(X_flat_train, y_train, X_flat_test)
+        
+        # Train and predict using XGBoost
+        xgb_predictions = train_and_predict_xgboost(X_flat_train, y_train, X_flat_test)
+        
+        # Calculate MAPE for each model
+        lstm_gru_mape = calculate_mape(y_test, lstm_gru_predictions)
+        arima_mape = calculate_mape(y_test, arima_predictions)
+        rf_mape = calculate_mape(y_test, rf_predictions)
+        xgb_mape = calculate_mape(y_test, xgb_predictions)
+        
+        print(f"LSTM/GRU MAPE: {lstm_gru_mape}")
+        print(f"ARIMA MAPE: {arima_mape}")
+        print(f"Random Forest MAPE: {rf_mape}")
+        print(f"XGBoost MAPE: {xgb_mape}")
+        
+        # Prepare data for JSON output
+        last_date = global_data['Date_reported'].iloc[-1]
         
         data = {
-            'dates': df['ds'].astype(str).tolist(),
-            'actual': actual.tolist(),
-            'predicted': predicted.tolist(),
-            'comparison_dates': [str(sixty_days_ago + timedelta(days=i)) for i in range(67)],
-            'comparison_actual': actual[-60:].tolist() + [None] * 7,  # Last 60 known + 7 unknown
-            'comparison_predicted': future_predictions.tolist(),
-            'future_dates': [str(last_date + timedelta(days=i)) for i in range(1, 8)],
-            'future_predicted': future_predictions[-7:].tolist()
+            'dates': global_data['Date_reported'].astype(str).tolist()[-test_size:],
+            'actual': np.expm1(scaler.inverse_transform(y_test.reshape(-1, 1))).flatten().tolist(),
+            'lstm_gru_predicted': np.expm1(scaler.inverse_transform(lstm_gru_predictions.reshape(-1, 1))).flatten().tolist(),
+            'arima_predicted': np.expm1(scaler.inverse_transform(arima_predictions.reshape(-1, 1))).flatten().tolist(),
+            'rf_predicted': np.expm1(scaler.inverse_transform(rf_predictions.reshape(-1, 1))).flatten().tolist(),
+            'xgb_predicted': np.expm1(scaler.inverse_transform(xgb_predictions.reshape(-1, 1))).flatten().tolist(),
+            'lstm_gru_mape': float(lstm_gru_mape),
+            'arima_mape': float(arima_mape),
+            'rf_mape': float(rf_mape),
+            'xgb_mape': float(xgb_mape),
+            'last_updated': datetime.now().isoformat()
         }
-        
-        print("Calculating metrics...")
-        mae, rmse, mape = calculate_metrics(actual[-60:], future_predictions[:60])  # Use last 60 days for metrics
-        
-        data['mae'] = float(mae)
-        data['rmse'] = float(rmse)
-        data['mape'] = float(mape)
-        data['last_updated'] = datetime.now().isoformat()
         
         print("Saving to JSON...")
         json_path = os.path.join(os.getcwd(), 'covid_predictions.json')
@@ -167,12 +154,6 @@ def main():
             json.dump(data, f)
         
         print(f"JSON file saved successfully at: {json_path}")
-        
-        # Print some debug information
-        print(f"Number of actual data points: {len(data['actual'])}")
-        print(f"Number of predicted data points: {len(data['predicted'])}")
-        print(f"Number of comparison data points: {len(data['comparison_predicted'])}")
-        print(f"Number of future prediction data points: {len(data['future_predicted'])}")
         
     except Exception as e:
         print(f"An error occurred: {str(e)}")
