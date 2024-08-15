@@ -95,7 +95,7 @@ def train_and_predict(df, sequence_length=90):
     model = create_model((X.shape[1], X.shape[2]))
     
     optimizer = tf.keras.optimizers.Adam(learning_rate=0.0007919746988842461)
-    model.compile(loss='mean_squared_error', optimizer=optimizer)
+    model.compile(loss='mean_absolute_percentage_error', optimizer=optimizer)
     
     early_stopping = EarlyStopping(monitor='loss', patience=10)
     model.fit(X, y, epochs=60, batch_size=32, verbose=2, callbacks=[early_stopping])
