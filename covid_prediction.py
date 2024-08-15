@@ -4,7 +4,7 @@ import json
 import pickle
 from datetime import datetime, timedelta
 import requests
-from tensorflow.keras.models import load_model
+from tensorflow.keras.models import model_from_json
 from sklearn.preprocessing import MinMaxScaler
 import tensorflow as tf
 import os
@@ -34,7 +34,14 @@ def fetch_and_clean_data():
 def load_lstm_model():
     print("Loading LSTM model...")
     try:
-        model = load_model('lstm_model.h5', compile=False)
+        # Load architecture
+        with open('lstm_model.json', 'r') as json_file:
+            loaded_model_json = json_file.read()
+        model = model_from_json(loaded_model_json)
+        
+        # Load weights
+        model.load_weights("lstm_model.weights.h5")
+        
         print("LSTM model loaded successfully.")
         model.summary()
         return model
@@ -45,7 +52,7 @@ def load_lstm_model():
 def load_arima_model():
     print("Loading ARIMA model...")
     try:
-        with open('arima_model.pkl', 'rb') as f:
+        with open('quick_arima_model.pkl', 'rb') as f:
             model = pickle.load(f)
         print("ARIMA model loaded successfully.")
         return model
@@ -112,7 +119,7 @@ def main():
         'ARIMA_Predicted': arima_predictions
     })
     
-    print("Comparison of LSTM/GRU vs ARIMA Predicted New Cases:")
+    print("\nComparison of LSTM/GRU vs ARIMA Predicted New Cases:")
     print(comparison_df.to_string(index=False))
 
 if __name__ == "__main__":
