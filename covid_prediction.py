@@ -105,7 +105,7 @@ def main():
         # LSTM/GRU model
         print("Training LSTM/GRU model...")
         lstm_gru_model = build_lstm_gru_model(sequence_length)
-        lstm_gru_model.fit(X_train, y_train, epochs=200, batch_size=16, verbose=2)
+        lstm_gru_model.fit(X_train, y_train, epochs=200, batch_size=32, verbose=2)
         lstm_gru_predictions = lstm_gru_model.predict(X_test)
         
         # ARIMA model
