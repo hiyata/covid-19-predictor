@@ -8,88 +8,83 @@ import traceback
 import requests
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import GRU, LSTM, Dense, Dropout, BatchNormalization, Input
-from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow.keras.layers import LSTM, GRU, Dense, Dropout, BatchNormalization, Input
 from sklearn.preprocessing import MinMaxScaler
 from statsmodels.tsa.arima.model import ARIMA
 from sklearn.ensemble import RandomForestRegressor
 from xgboost import XGBRegressor
+import matplotlib.pyplot as plt
 
-def preprocess_and_prepare_dataset():
-    print("Fetching and preprocessing data...")
+def fetch_and_clean_data():
+    print("Fetching and cleaning data...")
     url = "https://srhdpeuwpubsa.blob.core.windows.net/whdh/COVID/WHO-COVID-19-global-data.csv"
-    data = pd.read_csv(url)
-    data['Date_reported'] = pd.to_datetime(data['Date_reported'])
-    global_data = data.groupby('Date_reported').agg({'New_cases': 'sum'}).reset_index()
-    global_data['New_cases'] = np.log1p(global_data['New_cases'])
+    
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching data: {e}")
+        sys.exit(1)
+    
+    df = pd.read_csv(url)
+    
+    # Aggregate global daily cases
+    df_global = df.groupby('Date_reported')['New_cases'].sum().reset_index()
+    df_global.columns = ['Date_reported', 'New_cases']
+    df_global['Date_reported'] = pd.to_datetime(df_global['Date_reported'])
+    
+    # Apply log transformation to stabilize variance
+    df_global['New_cases'] = np.log1p(df_global['New_cases'])
+    
+    print(f"Data cleaned and transformed. Shape: {df_global.shape}")
+    return df_global
+
+def prepare_data(data, sequence_length=90):
     scaler = MinMaxScaler(feature_range=(0, 1))
-    global_data['New_cases'] = scaler.fit_transform(global_data['New_cases'].values.reshape(-1, 1))
-    return global_data, scaler
-
-def create_features(data, sequence_length):
+    scaled_data = scaler.fit_transform(data['New_cases'].values.reshape(-1, 1))
+    
     X, y = [], []
-    for i in range(len(data) - sequence_length):
-        X.append(data[i:i+sequence_length])
-        y.append(data[i+sequence_length])
-    X, y = np.array(X), np.array(y)
-    X_flat = X.reshape(X.shape[0], -1)
-    X = np.reshape(X, (X.shape[0], X.shape[1], 1))
-    return X, X_flat, y
+    for i in range(len(scaled_data) - sequence_length):
+        X.append(scaled_data[i:(i + sequence_length)])
+        y.append(scaled_data[i + sequence_length])
+    
+    X = np.array(X)
+    y = np.array(y)
+    
+    X_flat = X.reshape(X.shape[0], -1)  # Flatten for non-sequential models
+    X = np.reshape(X, (X.shape[0], X.shape[1], 1))  # Reshape for LSTM/GRU
+    
+    return X, X_flat, y, scaler
 
-def create_model(sequence_length):
+def build_lstm_gru_model(sequence_length):
     model = Sequential()
     model.add(Input(shape=(sequence_length, 1)))
-    
-    # Layer 0: GRU
-    model.add(GRU(40, return_sequences=True))
+    model.add(GRU(units=40, return_sequences=False))
     model.add(Dropout(0.1))
+    model.add(Dense(units=40))
+    model.add(Dense(units=100))
+    model.add(Dense(units=70))
+    model.add(Dense(units=1))
     
-    # Layer 1: LSTM
-    model.add(LSTM(20, return_sequences=True))
-    model.add(BatchNormalization())
-    
-    # Layer 2: GRU
-    model.add(GRU(90))
-    model.add(BatchNormalization())
-    model.add(Dropout(0.4))
-    
-    # Dense layers
-    model.add(Dense(40, activation='relu'))
-    model.add(Dense(100, activation='relu'))
-    model.add(Dense(70, activation='relu'))
-    
-    # Output layer
-    model.add(Dense(1))
-    
-    optimizer = tf.keras.optimizers.Adam(learning_rate=0.0007919746988842461)
-    model.compile(loss='mean_absolute_percentage_error', optimizer=optimizer)
+    model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.0007919746988842461),
+                  loss='mean_absolute_percentage_error')
     
     return model
 
-def train_and_predict_lstm_gru(X, y, X_test):
-    model = create_model(X.shape[1])
-    early_stopping = EarlyStopping(monitor='val_loss', patience=10)
-    model.fit(X, y, epochs=150, batch_size=32, validation_split=0.2, callbacks=[early_stopping], verbose=2)
-    predictions = model.predict(X_test)
-    return predictions.flatten()
-
-def train_and_predict_arima(train, test_length):
-    model = ARIMA(train, order=(5,1,0))
+def arima_model(train_data, order=(5,1,0)):
+    model = ARIMA(train_data, order=order)
     model_fit = model.fit()
-    predictions = model_fit.forecast(steps=test_length)
-    return predictions
+    return model_fit
 
-def train_and_predict_random_forest(X_train, y_train, X_test):
+def random_forest_model(X_train, y_train):
     model = RandomForestRegressor(n_estimators=100)
     model.fit(X_train, y_train)
-    predictions = model.predict(X_test)
-    return predictions
+    return model
 
-def train_and_predict_xgboost(X_train, y_train, X_test):
+def xgboost_model(X_train, y_train):
     model = XGBRegressor(objective='reg:squarederror')
     model.fit(X_train, y_train)
-    predictions = model.predict(X_test)
-    return predictions
+    return model
 
 def calculate_mape(actual, predicted):
     return np.mean(np.abs((actual - predicted) / actual)) * 100
@@ -97,63 +92,109 @@ def calculate_mape(actual, predicted):
 def main():
     try:
         print("Starting main function...")
-        global_data, scaler = preprocess_and_prepare_dataset()
-        sequence_length = 90  # As per the provided hyperparameters
+        global_data = fetch_and_clean_data()
         
-        X, X_flat, y = create_features(global_data['New_cases'].values, sequence_length)
+        sequence_length = 60
+        X, X_flat, y, scaler = prepare_data(global_data, sequence_length)
         
-        # Use the last 14 days for testing
-        test_size = 14
-        X_train, X_test = X[:-test_size], X[-test_size:]
-        X_flat_train, X_flat_test = X_flat[:-test_size], X_flat[-test_size:]
-        y_train, y_test = y[:-test_size], y[-test_size:]
+        # Use the last 7 days for final evaluation
+        train_data = global_data['New_cases'].values[:-7]
+        X_train, X_flat_train, y_train = X[:-7], X_flat[:-7], y[:-7]
+        X_test, X_flat_test = X[-7:], X_flat[-7:]
         
-        # Train and predict using LSTM/GRU model
-        lstm_gru_predictions = train_and_predict_lstm_gru(X_train, y_train, X_test)
+        # LSTM/GRU model
+        print("Training LSTM/GRU model...")
+        lstm_gru_model = build_lstm_gru_model(sequence_length)
+        lstm_gru_model.fit(X_train, y_train, epochs=200, batch_size=16, verbose=2)
+        lstm_gru_predictions = lstm_gru_model.predict(X_test)
         
-        # Train and predict using ARIMA model
-        arima_predictions = train_and_predict_arima(global_data['New_cases'].values[:-test_size], test_size)
+        # ARIMA model
+        print("Training ARIMA model...")
+        arima_model_fit = arima_model(train_data)
+        arima_predictions = arima_model_fit.forecast(steps=7)
         
-        # Train and predict using Random Forest
-        rf_predictions = train_and_predict_random_forest(X_flat_train, y_train, X_flat_test)
+        # Random Forest model
+        print("Training Random Forest model...")
+        rf_model = random_forest_model(X_flat_train, y_train)
+        rf_predictions = rf_model.predict(X_flat_test)
         
-        # Train and predict using XGBoost
-        xgb_predictions = train_and_predict_xgboost(X_flat_train, y_train, X_flat_test)
+        # XGBoost model
+        print("Training XGBoost model...")
+        xgb_model = xgboost_model(X_flat_train, y_train)
+        xgb_predictions = xgb_model.predict(X_flat_test)
         
-        # Calculate MAPE for each model
-        lstm_gru_mape = calculate_mape(y_test, lstm_gru_predictions)
-        arima_mape = calculate_mape(y_test, arima_predictions)
-        rf_mape = calculate_mape(y_test, rf_predictions)
-        xgb_mape = calculate_mape(y_test, xgb_predictions)
+        # Inverse transform predictions and actual values
+        actual_cases = np.expm1(global_data['New_cases'].values[-7:])
+        lstm_gru_predictions = np.expm1(scaler.inverse_transform(lstm_gru_predictions).flatten())
+        arima_predictions = np.expm1(arima_predictions)
+        rf_predictions = np.expm1(scaler.inverse_transform(rf_predictions.reshape(-1, 1)).flatten())
+        xgb_predictions = np.expm1(scaler.inverse_transform(xgb_predictions.reshape(-1, 1)).flatten())
         
-        print(f"LSTM/GRU MAPE: {lstm_gru_mape}")
-        print(f"ARIMA MAPE: {arima_mape}")
-        print(f"Random Forest MAPE: {rf_mape}")
-        print(f"XGBoost MAPE: {xgb_mape}")
+        # Calculate MAPE for the final predictions
+        lstm_gru_mape = calculate_mape(actual_cases, lstm_gru_predictions)
+        arima_mape = calculate_mape(actual_cases, arima_predictions)
+        rf_mape = calculate_mape(actual_cases, rf_predictions)
+        xgb_mape = calculate_mape(actual_cases, xgb_predictions)
         
-        # Prepare data for JSON output
-        last_date = global_data['Date_reported'].iloc[-1]
+        # Print the final MAPE values
+        print("\nFinal MAPE values:")
+        print(f"LSTM/GRU Final MAPE: {lstm_gru_mape}")
+        print(f"ARIMA Final MAPE: {arima_mape}")
+        print(f"Random Forest Final MAPE: {rf_mape}")
+        print(f"XGBoost Final MAPE: {xgb_mape}")
         
-        data = {
-            'dates': global_data['Date_reported'].astype(str).tolist()[-test_size:],
-            'actual': np.expm1(scaler.inverse_transform(y_test.reshape(-1, 1))).flatten().tolist(),
-            'lstm_gru_predicted': np.expm1(scaler.inverse_transform(lstm_gru_predictions.reshape(-1, 1))).flatten().tolist(),
-            'arima_predicted': np.expm1(scaler.inverse_transform(arima_predictions.reshape(-1, 1))).flatten().tolist(),
-            'rf_predicted': np.expm1(scaler.inverse_transform(rf_predictions.reshape(-1, 1))).flatten().tolist(),
-            'xgb_predicted': np.expm1(scaler.inverse_transform(xgb_predictions.reshape(-1, 1))).flatten().tolist(),
-            'lstm_gru_mape': float(lstm_gru_mape),
-            'arima_mape': float(arima_mape),
-            'rf_mape': float(rf_mape),
-            'xgb_mape': float(xgb_mape),
+        # Create a DataFrame to compare actual vs predicted
+        comparison_df = pd.DataFrame({
+            'Date': global_data['Date_reported'].values[-7:],
+            'Actual': actual_cases,
+            'LSTM_GRU_Predicted': lstm_gru_predictions,
+            'ARIMA_Predicted': arima_predictions,
+            'Random_Forest_Predicted': rf_predictions,
+            'XGBoost_Predicted': xgb_predictions
+        })
+        
+        # Display the comparison DataFrame
+        print("\nComparison of actual vs predicted cases for the last 7 days:")
+        print(comparison_df)
+        
+        # Save results to JSON
+        results = {
+            'dates': comparison_df['Date'].astype(str).tolist(),
+            'actual': comparison_df['Actual'].tolist(),
+            'lstm_gru_predictions': comparison_df['LSTM_GRU_Predicted'].tolist(),
+            'arima_predictions': comparison_df['ARIMA_Predicted'].tolist(),
+            'rf_predictions': comparison_df['Random_Forest_Predicted'].tolist(),
+            'xgb_predictions': comparison_df['XGBoost_Predicted'].tolist(),
+            'mape': {
+                'lstm_gru': lstm_gru_mape,
+                'arima': arima_mape,
+                'random_forest': rf_mape,
+                'xgboost': xgb_mape
+            },
             'last_updated': datetime.now().isoformat()
         }
         
-        print("Saving to JSON...")
         json_path = os.path.join(os.getcwd(), 'covid_predictions.json')
         with open(json_path, 'w') as f:
-            json.dump(data, f)
+            json.dump(results, f)
         
-        print(f"JSON file saved successfully at: {json_path}")
+        print(f"\nResults saved to: {json_path}")
+        
+        # Plot results
+        plt.figure(figsize=(12, 6))
+        plt.plot(comparison_df['Date'], comparison_df['Actual'], label='Actual', marker='o')
+        plt.plot(comparison_df['Date'], comparison_df['LSTM_GRU_Predicted'], label='LSTM/GRU', marker='s')
+        plt.plot(comparison_df['Date'], comparison_df['ARIMA_Predicted'], label='ARIMA', marker='^')
+        plt.plot(comparison_df['Date'], comparison_df['Random_Forest_Predicted'], label='Random Forest', marker='D')
+        plt.plot(comparison_df['Date'], comparison_df['XGBoost_Predicted'], label='XGBoost', marker='v')
+        plt.title('COVID-19 Case Predictions for Last 7 Days')
+        plt.xlabel('Date')
+        plt.ylabel('New Cases')
+        plt.legend()
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+        plt.savefig('covid_predictions_plot.png')
+        print("Plot saved as covid_predictions_plot.png")
         
     except Exception as e:
         print(f"An error occurred: {str(e)}")
