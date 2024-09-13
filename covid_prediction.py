@@ -28,49 +28,34 @@ def fetch_and_clean_data():
     
     df = pd.read_csv(url)
     
+    # Aggregate global daily cases
     df_global = df.groupby('Date_reported')['New_cases'].sum().reset_index()
-    df_global.columns = ['ds', 'y']
-    df_global['ds'] = pd.to_datetime(df_global['ds'])
+    df_global.columns = ['Date_reported', 'New_cases']
+    df_global['Date_reported'] = pd.to_datetime(df_global['Date_reported'])
     
-    df_global['day_of_week'] = df_global['ds'].dt.dayofweek
+    # Apply log transformation to stabilize variance
+    df_global['New_cases'] = np.log1p(df_global['New_cases'])
     
-    full_range = pd.date_range(start=df_global['ds'].min(), end=df_global['ds'].max(), freq='D')
-    df_global = df_global.set_index('ds').reindex(full_range).reset_index().rename(columns={'index': 'ds'})
-    
-    # Replace infinite values with NaN
-    df_global['y'] = df_global['y'].replace([np.inf, -np.inf], np.nan)
-    
-    # Interpolate NaN values
-    df_global['y'] = df_global['y'].interpolate(method='linear')
-    
-    # Ensure non-negative values
-    df_global['y'] = df_global['y'].clip(lower=0)
-    
-    # Remove any remaining NaN values
-    df_global = df_global.dropna()
-    
-    df_global['day_of_week'] = df_global['ds'].dt.dayofweek
-    
-    print(f"Data cleaned and interpolated. Shape: {df_global.shape}")
+    print(f"Data cleaned and transformed. Shape: {df_global.shape}")
     return df_global
 
-def prepare_data(data, sequence_length):
+def prepare_data(data, sequence_length=90):
     scaler = MinMaxScaler(feature_range=(0, 1))
-    scaled_data = scaler.fit_transform(data['y'].values.reshape(-1, 1))
+    scaled_data = scaler.fit_transform(data['New_cases'].values.reshape(-1, 1))
     
-    X = []
-    y = []
+    X, y = [], []
     for i in range(len(scaled_data) - sequence_length):
-        X.append(scaled_data[i:(i + sequence_length), 0])
-        y.append(scaled_data[i + sequence_length, 0])
+        X.append(scaled_data[i:(i + sequence_length)])
+        y.append(scaled_data[i + sequence_length])
     
     X = np.array(X)
-    X = np.reshape(X, (X.shape[0], X.shape[1], 1))
     y = np.array(y)
     
-    X_flat = X.reshape((X.shape[0], -1))
+    X_flat = X.reshape(X.shape[0], -1)  # Flatten for non-sequential models
+    X = np.reshape(X, (X.shape[0], X.shape[1], 1))  # Reshape for LSTM/GRU
     
     return X, X_flat, y, scaler
+
 def build_lstm_gru_model(sequence_length):
     model = Sequential()
     model.add(Input(shape=(sequence_length, 1)))
@@ -113,7 +98,7 @@ def main():
         X, X_flat, y, scaler = prepare_data(global_data, sequence_length)
         
         # Use the last 7 days for final evaluation
-        train_data = global_data['y'].values[:-7]  # Changed from 'New_cases' to 'y'
+        train_data = global_data['New_cases'].values[:-7]
         X_train, X_flat_train, y_train = X[:-7], X_flat[:-7], y[:-7]
         X_test, X_flat_test = X[-7:], X_flat[-7:]
         
@@ -139,7 +124,7 @@ def main():
         xgb_predictions = xgb_model.predict(X_flat_test)
         
         # Inverse transform predictions and actual values
-        actual_cases = np.expm1(global_data['y'].values[-7:])  # Changed from 'New_cases' to 'y'
+        actual_cases = np.expm1(global_data['New_cases'].values[-7:])
         lstm_gru_predictions = np.expm1(scaler.inverse_transform(lstm_gru_predictions).flatten())
         arima_predictions = np.expm1(arima_predictions)
         rf_predictions = np.expm1(scaler.inverse_transform(rf_predictions.reshape(-1, 1)).flatten())
@@ -160,7 +145,7 @@ def main():
         
         # Create a DataFrame to compare actual vs predicted
         comparison_df = pd.DataFrame({
-            'Date': global_data['ds'].values[-7:],  # Changed from 'Date_reported' to 'ds'
+            'Date': global_data['Date_reported'].values[-7:],
             'Actual': actual_cases,
             'LSTM_GRU_Predicted': lstm_gru_predictions,
             'ARIMA_Predicted': arima_predictions,
