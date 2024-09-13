@@ -113,7 +113,7 @@ def main():
         X, X_flat, y, scaler = prepare_data(global_data, sequence_length)
         
         # Use the last 7 days for final evaluation
-        train_data = global_data['New_cases'].values[:-7]
+        train_data = global_data['y'].values[:-7]  # Changed from 'New_cases' to 'y'
         X_train, X_flat_train, y_train = X[:-7], X_flat[:-7], y[:-7]
         X_test, X_flat_test = X[-7:], X_flat[-7:]
         
@@ -139,7 +139,7 @@ def main():
         xgb_predictions = xgb_model.predict(X_flat_test)
         
         # Inverse transform predictions and actual values
-        actual_cases = np.expm1(global_data['New_cases'].values[-7:])
+        actual_cases = np.expm1(global_data['y'].values[-7:])  # Changed from 'New_cases' to 'y'
         lstm_gru_predictions = np.expm1(scaler.inverse_transform(lstm_gru_predictions).flatten())
         arima_predictions = np.expm1(arima_predictions)
         rf_predictions = np.expm1(scaler.inverse_transform(rf_predictions.reshape(-1, 1)).flatten())
@@ -160,7 +160,7 @@ def main():
         
         # Create a DataFrame to compare actual vs predicted
         comparison_df = pd.DataFrame({
-            'Date': global_data['Date_reported'].values[-7:],
+            'Date': global_data['ds'].values[-7:],  # Changed from 'Date_reported' to 'ds'
             'Actual': actual_cases,
             'LSTM_GRU_Predicted': lstm_gru_predictions,
             'ARIMA_Predicted': arima_predictions,
