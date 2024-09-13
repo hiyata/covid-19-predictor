@@ -14,11 +14,6 @@ from statsmodels.tsa.arima.model import ARIMA
 from sklearn.ensemble import RandomForestRegressor
 from xgboost import XGBRegressor
 import matplotlib.pyplot as plt
-import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
-import requests
-import sys
 
 def fetch_and_clean_data():
     print("Fetching and cleaning data...")
@@ -33,10 +28,17 @@ def fetch_and_clean_data():
     
     df = pd.read_csv(url)
     
+    # Convert 'Date_reported' to datetime
+    df['Date_reported'] = pd.to_datetime(df['Date_reported'])
+    
+    # Sort by date to ensure chronological order
+    df = df.sort_values('Date_reported')
+    
     # Aggregate global daily cases
     df_global = df.groupby('Date_reported')['New_cases'].sum().reset_index()
-    df_global.columns = ['Date_reported', 'New_cases']
-    df_global['Date_reported'] = pd.to_datetime(df_global['Date_reported'])
+    
+    # Handle missing values
+    df_global['New_cases'] = df_global['New_cases'].fillna(0)
     
     # Check for negative values
     negative_cases = df_global[df_global['New_cases'] < 0]
@@ -50,24 +52,26 @@ def fetch_and_clean_data():
     if not zero_cases.empty:
         print(f"Note: Found {len(zero_cases)} days with zero case counts.")
     
-    # Add a small constant
+    # Add a small constant to avoid log(0)
     epsilon = 1e-1  # This value can be adjusted based on your data
     df_global['New_cases'] = df_global['New_cases'] + epsilon
     
     # Apply log transformation
-    df_global['New_cases'] = np.log1p(df_global['New_cases'])
+    df_global['New_cases_log'] = np.log1p(df_global['New_cases'])
     
     # Check for infinity or NaN values after transformation
-    inf_or_nan = df_global[~np.isfinite(df_global['New_cases'])]
+    inf_or_nan = df_global[~np.isfinite(df_global['New_cases_log'])]
     if not inf_or_nan.empty:
         print(f"Warning: Found {len(inf_or_nan)} infinite or NaN values after log transformation.")
         print(inf_or_nan)
         # Replace inf or NaN with the mean of finite values
-        mean_cases = df_global['New_cases'][np.isfinite(df_global['New_cases'])].mean()
-        df_global['New_cases'] = df_global['New_cases'].replace([np.inf, -np.inf, np.nan], mean_cases)
+        mean_cases = df_global['New_cases_log'][np.isfinite(df_global['New_cases_log'])].mean()
+        df_global['New_cases_log'] = df_global['New_cases_log'].replace([np.inf, -np.inf, np.nan], mean_cases)
     
     print(f"Data cleaned and transformed. Shape: {df_global.shape}")
+    print(f"Date range: {df_global['Date_reported'].min()} to {df_global['Date_reported'].max()}")
     print(f"New_cases range: {df_global['New_cases'].min()} to {df_global['New_cases'].max()}")
+    print(f"New_cases_log range: {df_global['New_cases_log'].min()} to {df_global['New_cases_log'].max()}")
     
     return df_global
 
