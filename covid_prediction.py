@@ -54,23 +54,23 @@ def fetch_and_clean_data():
     print(f"Data cleaned and interpolated. Shape: {df_global.shape}")
     return df_global
 
-def prepare_data(data, sequence_length=90):
+def prepare_data(data, sequence_length):
     scaler = MinMaxScaler(feature_range=(0, 1))
-    scaled_data = scaler.fit_transform(data['New_cases'].values.reshape(-1, 1))
+    scaled_data = scaler.fit_transform(data['y'].values.reshape(-1, 1))
     
-    X, y = [], []
+    X = []
+    y = []
     for i in range(len(scaled_data) - sequence_length):
-        X.append(scaled_data[i:(i + sequence_length)])
-        y.append(scaled_data[i + sequence_length])
+        X.append(scaled_data[i:(i + sequence_length), 0])
+        y.append(scaled_data[i + sequence_length, 0])
     
     X = np.array(X)
+    X = np.reshape(X, (X.shape[0], X.shape[1], 1))
     y = np.array(y)
     
-    X_flat = X.reshape(X.shape[0], -1)  # Flatten for non-sequential models
-    X = np.reshape(X, (X.shape[0], X.shape[1], 1))  # Reshape for LSTM/GRU
+    X_flat = X.reshape((X.shape[0], -1))
     
     return X, X_flat, y, scaler
-
 def build_lstm_gru_model(sequence_length):
     model = Sequential()
     model.add(Input(shape=(sequence_length, 1)))
