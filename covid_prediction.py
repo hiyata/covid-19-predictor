@@ -28,15 +28,30 @@ def fetch_and_clean_data():
     
     df = pd.read_csv(url)
     
-    # Aggregate global daily cases
     df_global = df.groupby('Date_reported')['New_cases'].sum().reset_index()
-    df_global.columns = ['Date_reported', 'New_cases']
-    df_global['Date_reported'] = pd.to_datetime(df_global['Date_reported'])
+    df_global.columns = ['ds', 'y']
+    df_global['ds'] = pd.to_datetime(df_global['ds'])
     
-    # Apply log transformation to stabilize variance
-    df_global['New_cases'] = np.log1p(df_global['New_cases'])
+    df_global['day_of_week'] = df_global['ds'].dt.dayofweek
     
-    print(f"Data cleaned and transformed. Shape: {df_global.shape}")
+    full_range = pd.date_range(start=df_global['ds'].min(), end=df_global['ds'].max(), freq='D')
+    df_global = df_global.set_index('ds').reindex(full_range).reset_index().rename(columns={'index': 'ds'})
+    
+    # Replace infinite values with NaN
+    df_global['y'] = df_global['y'].replace([np.inf, -np.inf], np.nan)
+    
+    # Interpolate NaN values
+    df_global['y'] = df_global['y'].interpolate(method='linear')
+    
+    # Ensure non-negative values
+    df_global['y'] = df_global['y'].clip(lower=0)
+    
+    # Remove any remaining NaN values
+    df_global = df_global.dropna()
+    
+    df_global['day_of_week'] = df_global['ds'].dt.dayofweek
+    
+    print(f"Data cleaned and interpolated. Shape: {df_global.shape}")
     return df_global
 
 def prepare_data(data, sequence_length=90):
