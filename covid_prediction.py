@@ -56,17 +56,17 @@ def prepare_data(df):
     return train_test_split(X_scaled, y, test_size=0.2, random_state=42)
 
 def train_models(X_train, y_train):
-    rf_model = RandomForestRegressor(n_estimators=100, random_state=42)
+    rf_model = RandomForestRegressor(n_estimators=200, min_samples_leaf=5, random_state=42)
     rf_model.fit(X_train, y_train)
     
-    xgb_model = XGBRegressor(objective='reg:squarederror', random_state=42)
+    xgb_model = XGBRegressor(objective='reg:squarederror', n_estimators=200, learning_rate=0.05, random_state=42)
     xgb_model.fit(X_train, y_train)
     
     return rf_model, xgb_model
 
 def evaluate_models(models, X_test, y_test):
     for name, model in models.items():
-        predictions = model.predict(X_test)
+        predictions = np.maximum(model.predict(X_test), 0)  # Ensure non-negative predictions
         mae = mean_absolute_error(y_test, predictions)
         rmse = np.sqrt(mean_squared_error(y_test, predictions))
         print(f"{name} - MAE: {mae:.2f}, RMSE: {rmse:.2f}")
@@ -80,9 +80,9 @@ def make_future_predictions(df, models, days=7):
     future_df['month'] = future_df['Date_reported'].dt.month
     future_df['day'] = future_df['Date_reported'].dt.day
     
-    # Use the last available 7-day and 30-day averages for all future predictions
-    future_df['7day_avg'] = df['7day_avg'].iloc[-1]
-    future_df['30day_avg'] = df['30day_avg'].iloc[-1]
+    # Use the average of the last 7 days for future predictions
+    future_df['7day_avg'] = df['New_cases'].tail(7).mean()
+    future_df['30day_avg'] = df['New_cases'].tail(30).mean()
     
     scaler = StandardScaler()
     scaler.fit(df[['dayofweek', 'month', 'day', '7day_avg', '30day_avg']])
@@ -90,7 +90,7 @@ def make_future_predictions(df, models, days=7):
     
     predictions = {}
     for name, model in models.items():
-        predictions[name] = model.predict(future_scaled)
+        predictions[name] = np.maximum(model.predict(future_scaled), 0)  # Ensure non-negative predictions
     
     future_df['RF_Predicted'] = predictions['Random Forest']
     future_df['XGB_Predicted'] = predictions['XGBoost']
@@ -113,7 +113,18 @@ def main():
     future_predictions = make_future_predictions(df, models)
     
     print("\nFuture Predictions:")
-    print(future_predictions)
+    print(future_predictions.to_string(index=False))
+
+    # Save predictions to JSON
+    predictions_dict = {
+        'dates': future_predictions['Date_reported'].dt.strftime('%Y-%m-%d').tolist(),
+        'rf_predictions': future_predictions['RF_Predicted'].tolist(),
+        'xgb_predictions': future_predictions['XGB_Predicted'].tolist()
+    }
+    
+    import json
+    with open('covid_predictions.json', 'w') as f:
+        json.dump(predictions_dict, f)
 
 if __name__ == "__main__":
     main()
