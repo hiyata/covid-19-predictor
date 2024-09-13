@@ -1,229 +1,206 @@
 import pandas as pd
 import numpy as np
+from datetime import datetime, timedelta
+import json
+import os
+import sys
+import traceback
+import requests
 import tensorflow as tf
-from statsmodels.tsa.arima.model import ARIMA
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, LSTM, GRU, Dropout, BatchNormalization, Input
+from tensorflow.keras.layers import LSTM, GRU, Dense, Dropout, BatchNormalization, Input
 from sklearn.preprocessing import MinMaxScaler
+from statsmodels.tsa.arima.model import ARIMA
 from sklearn.ensemble import RandomForestRegressor
 from xgboost import XGBRegressor
-import keras_tuner as kt
 import matplotlib.pyplot as plt
 
-# Preprocess and prepare the dataset
-def preprocess_and_prepare_dataset():
-    # Load the dataset
+def fetch_and_clean_data():
+    print("Fetching and cleaning data...")
     url = "https://srhdpeuwpubsa.blob.core.windows.net/whdh/COVID/WHO-COVID-19-global-data.csv"
-    data = pd.read_csv(url)
-    data['Date_reported'] = pd.to_datetime(data['Date_reported'])
-
-    # Aggregate data globally by date
-    global_data = data.groupby('Date_reported').agg({'New_cases': 'sum'}).reset_index()
-
+    
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching data: {e}")
+        sys.exit(1)
+    
+    df = pd.read_csv(url)
+    
+    # Aggregate global daily cases
+    df_global = df.groupby('Date_reported')['New_cases'].sum().reset_index()
+    df_global.columns = ['Date_reported', 'New_cases']
+    df_global['Date_reported'] = pd.to_datetime(df_global['Date_reported'])
+    
     # Apply log transformation to stabilize variance
-    global_data['New_cases'] = np.log1p(global_data['New_cases'])
+    df_global['New_cases'] = np.log1p(df_global['New_cases'])
+    
+    print(f"Data cleaned and transformed. Shape: {df_global.shape}")
+    return df_global
 
-    # Normalize the data to the range [0, 1]
+def prepare_data(data, sequence_length=90):
     scaler = MinMaxScaler(feature_range=(0, 1))
-    global_data['New_cases'] = scaler.fit_transform(global_data['New_cases'].values.reshape(-1, 1))
-
-    return global_data, scaler
-
-# Create consistent features for all models
-def create_features(data, sequence_length):
+    scaled_data = scaler.fit_transform(data['New_cases'].values.reshape(-1, 1))
+    
     X, y = [], []
-    for i in range(len(data) - sequence_length):
-        X.append(data[i:i+sequence_length])
-        y.append(data[i+sequence_length])
+    for i in range(len(scaled_data) - sequence_length):
+        X.append(scaled_data[i:(i + sequence_length)])
+        y.append(scaled_data[i + sequence_length])
+    
     X = np.array(X)
     y = np.array(y)
+    
     X_flat = X.reshape(X.shape[0], -1)  # Flatten for non-sequential models
     X = np.reshape(X, (X.shape[0], X.shape[1], 1))  # Reshape for LSTM/GRU
-    return X, X_flat, y
+    
+    return X, X_flat, y, scaler
 
-# Define the LSTM/GRU model building function for Keras Tuner
-def build_lstm_gru_model(hp):
+def build_lstm_gru_model(sequence_length):
     model = Sequential()
-
-    # Tuning sequence length
-    sequence_length = hp.Int('sequence_length', min_value=30, max_value=120, step=10)
-
-    # Input layer
     model.add(Input(shape=(sequence_length, 1)))
-
-    for i in range(hp.Int('num_layers', 1, 3)):
-        layer_type = hp.Choice(f'layer_type_{i}', ['LSTM', 'GRU'])
-        units = hp.Int(f'units_{i}', min_value=10, max_value=100, step=10)
-
-        if layer_type == 'LSTM':
-            model.add(LSTM(units=units, return_sequences=(i < hp.Int('num_layers', 1, 3) - 1)))
-        else:
-            model.add(GRU(units=units, return_sequences=(i < hp.Int('num_layers', 1, 3) - 1)))
-
-        # Optional normalization layer
-        if hp.Boolean(f'normalization_{i}'):
-            model.add(BatchNormalization())
-
-        # Dropout layer
-        model.add(Dropout(hp.Float(f'dropout_{i}', min_value=0.0, max_value=0.5, step=0.1)))
-
-    # Dense layers
-    for i in range(hp.Int('num_dense_layers', 1, 3)):
-        model.add(Dense(units=hp.Int(f'dense_units_{i}', min_value=10, max_value=100, step=10)))
-
+    model.add(GRU(units=40, return_sequences=False))
+    model.add(Dropout(0.1))
+    model.add(Dense(units=40))
+    model.add(Dense(units=100))
+    model.add(Dense(units=70))
     model.add(Dense(units=1))
-
-    # Compile the model
-    model.compile(optimizer=tf.keras.optimizers.Adam(
-                      learning_rate=hp.Float('learning_rate', min_value=1e-4, max_value=1e-2, sampling='log')),
+    
+    model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.0007919746988842461),
                   loss='mean_absolute_percentage_error')
-
+    
     return model
 
-# Tuning the LSTM/GRU model
-lstm_gru_tuner = kt.BayesianOptimization(
-    build_lstm_gru_model,
-    objective='val_loss',
-    max_trials=50,
-    executions_per_trial=2,
-    directory='lstm_gru_dir',
-    project_name='lstm_gru_tuning'
-)
-
-# Tuning ARIMA model parameters
-def tune_arima_params(train, order):
-    model = ARIMA(train, order=order)
+def arima_model(train_data, order=(5,1,0)):
+    model = ARIMA(train_data, order=order)
     model_fit = model.fit()
     return model_fit
 
-# Function to train and predict using RandomForestRegressor
-def random_forest_model(X_train, y_train, X_test):
+def random_forest_model(X_train, y_train):
     model = RandomForestRegressor(n_estimators=100)
     model.fit(X_train, y_train)
-    predictions = model.predict(X_test)
-    return predictions
+    return model
 
-# Function to train and predict using XGBRegressor
-def xgboost_model(X_train, y_train, X_test):
+def xgboost_model(X_train, y_train):
     model = XGBRegressor(objective='reg:squarederror')
     model.fit(X_train, y_train)
-    predictions = model.predict(X_test)
-    return predictions
+    return model
 
-# Define the goal MAPE
-goal_mape = 10.0  # Adjust as needed
+def calculate_mape(actual, predicted):
+    return np.mean(np.abs((actual - predicted) / actual)) * 100
 
-# Preprocess the dataset
-global_data, scaler = preprocess_and_prepare_dataset()
+def main():
+    try:
+        print("Starting main function...")
+        global_data = fetch_and_clean_data()
+        
+        sequence_length = 60
+        X, X_flat, y, scaler = prepare_data(global_data, sequence_length)
+        
+        # Use the last 7 days for final evaluation
+        train_data = global_data['New_cases'].values[:-7]
+        X_train, X_flat_train, y_train = X[:-7], X_flat[:-7], y[:-7]
+        X_test, X_flat_test = X[-7:], X_flat[-7:]
+        
+        # LSTM/GRU model
+        print("Training LSTM/GRU model...")
+        lstm_gru_model = build_lstm_gru_model(sequence_length)
+        lstm_gru_model.fit(X_train, y_train, epochs=200, batch_size=32, verbose=2)
+        lstm_gru_predictions = lstm_gru_model.predict(X_test)
+        
+        # ARIMA model
+        print("Training ARIMA model...")
+        arima_model_fit = arima_model(train_data)
+        arima_predictions = arima_model_fit.forecast(steps=7)
+        
+        # Random Forest model
+        print("Training Random Forest model...")
+        rf_model = random_forest_model(X_flat_train, y_train)
+        rf_predictions = rf_model.predict(X_flat_test)
+        
+        # XGBoost model
+        print("Training XGBoost model...")
+        xgb_model = xgboost_model(X_flat_train, y_train)
+        xgb_predictions = xgb_model.predict(X_flat_test)
+        
+        # Inverse transform predictions and actual values
+        actual_cases = np.expm1(global_data['New_cases'].values[-7:])
+        lstm_gru_predictions = np.expm1(scaler.inverse_transform(lstm_gru_predictions).flatten())
+        arima_predictions = np.expm1(arima_predictions)
+        rf_predictions = np.expm1(scaler.inverse_transform(rf_predictions.reshape(-1, 1)).flatten())
+        xgb_predictions = np.expm1(scaler.inverse_transform(xgb_predictions.reshape(-1, 1)).flatten())
+        
+        # Calculate MAPE for the final predictions
+        lstm_gru_mape = calculate_mape(actual_cases, lstm_gru_predictions)
+        arima_mape = calculate_mape(actual_cases, arima_predictions)
+        rf_mape = calculate_mape(actual_cases, rf_predictions)
+        xgb_mape = calculate_mape(actual_cases, xgb_predictions)
+        
+        # Print the final MAPE values
+        print("\nFinal MAPE values:")
+        print(f"LSTM/GRU Final MAPE: {lstm_gru_mape}")
+        print(f"ARIMA Final MAPE: {arima_mape}")
+        print(f"Random Forest Final MAPE: {rf_mape}")
+        print(f"XGBoost Final MAPE: {xgb_mape}")
+        
+        # Create a DataFrame to compare actual vs predicted
+        comparison_df = pd.DataFrame({
+            'Date': global_data['Date_reported'].values[-7:],
+            'Actual': actual_cases,
+            'LSTM_GRU_Predicted': lstm_gru_predictions,
+            'ARIMA_Predicted': arima_predictions,
+            'Random_Forest_Predicted': rf_predictions,
+            'XGBoost_Predicted': xgb_predictions
+        })
+        
+        # Display the comparison DataFrame
+        print("\nComparison of actual vs predicted cases for the last 7 days:")
+        print(comparison_df)
+        
+        # Save results to JSON
+        results = {
+            'dates': comparison_df['Date'].astype(str).tolist(),
+            'actual': comparison_df['Actual'].tolist(),
+            'lstm_gru_predictions': comparison_df['LSTM_GRU_Predicted'].tolist(),
+            'arima_predictions': comparison_df['ARIMA_Predicted'].tolist(),
+            'rf_predictions': comparison_df['Random_Forest_Predicted'].tolist(),
+            'xgb_predictions': comparison_df['XGBoost_Predicted'].tolist(),
+            'mape': {
+                'lstm_gru': lstm_gru_mape,
+                'arima': arima_mape,
+                'random_forest': rf_mape,
+                'xgboost': xgb_mape
+            },
+            'last_updated': datetime.now().isoformat()
+        }
+        
+        json_path = os.path.join(os.getcwd(), 'covid_predictions.json')
+        with open(json_path, 'w') as f:
+            json.dump(results, f)
+        
+        print(f"\nResults saved to: {json_path}")
+        
+        # Plot results
+        plt.figure(figsize=(12, 6))
+        plt.plot(comparison_df['Date'], comparison_df['Actual'], label='Actual', marker='o')
+        plt.plot(comparison_df['Date'], comparison_df['LSTM_GRU_Predicted'], label='LSTM/GRU', marker='s')
+        plt.plot(comparison_df['Date'], comparison_df['ARIMA_Predicted'], label='ARIMA', marker='^')
+        plt.plot(comparison_df['Date'], comparison_df['Random_Forest_Predicted'], label='Random Forest', marker='D')
+        plt.plot(comparison_df['Date'], comparison_df['XGBoost_Predicted'], label='XGBoost', marker='v')
+        plt.title('COVID-19 Case Predictions for Last 7 Days')
+        plt.xlabel('Date')
+        plt.ylabel('New Cases')
+        plt.legend()
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+        plt.savefig('covid_predictions_plot.png')
+        print("Plot saved as covid_predictions_plot.png")
+        
+    except Exception as e:
+        print(f"An error occurred: {str(e)}")
+        print("Traceback:")
+        traceback.print_exc()
+        sys.exit(1)
 
-# Initialize the sequence length for the first run
-initial_sequence_length = 60  # You can adjust this value
-X, X_flat, y = create_features(global_data['New_cases'].values, initial_sequence_length)
-
-# Initialize the ARIMA order
-arima_order = (5, 1, 0)  # Adjust these values as necessary for your data
-
-# Simulation of the GAN-style competition
-for iteration in range(10):
-    print(f"Iteration {iteration + 1}")
-
-    # Tune LSTM/GRU model
-    lstm_gru_tuner.search(X, y, epochs=10, validation_split=0.2, batch_size=32)
-    best_lstm_gru_model = lstm_gru_tuner.get_best_models(num_models=1)[0]
-
-    # Retrieve the best sequence length from the hyperparameters
-    best_sequence_length = lstm_gru_tuner.oracle.get_best_trials(num_trials=1)[0].hyperparameters.values['sequence_length']
-
-    # Recreate sequences using the best sequence length
-    X, X_flat, y = create_features(global_data['New_cases'].values, best_sequence_length)
-
-    # ARIMA training and tuning
-    train_data = global_data['New_cases'].values
-    arima_model = tune_arima_params(train_data, arima_order)
-
-    # Random Forest training and prediction
-    rf_predictions = random_forest_model(X_flat, y, X_flat)
-
-    # XGBoost training and prediction
-    xgb_predictions = xgboost_model(X_flat, y, X_flat)
-
-    # LSTM/GRU prediction
-    lstm_gru_predictions = best_lstm_gru_model.predict(X)
-
-    # ARIMA prediction
-    arima_predictions = arima_model.predict(start=len(train_data), end=len(train_data)+len(y)-1)
-
-    # Calculate performance metrics (e.g., MAPE)
-    lstm_gru_mape = np.mean(np.abs((y.flatten() - lstm_gru_predictions.flatten()) / y.flatten())) * 100
-    arima_mape = np.mean(np.abs((y.flatten() - arima_predictions.flatten()) / y.flatten())) * 100
-    rf_mape = np.mean(np.abs((y.flatten() - rf_predictions.flatten()) / y.flatten())) * 100
-    xgb_mape = np.mean(np.abs((y.flatten() - xgb_predictions.flatten()) / y.flatten())) * 100
-
-    print(f"LSTM/GRU MAPE: {lstm_gru_mape}")
-    print(f"ARIMA MAPE: {arima_mape}")
-    print(f"Random Forest MAPE: {rf_mape}")
-    print(f"XGBoost MAPE: {xgb_mape}")
-
-    # Check if any model meets the goal MAPE
-    if lstm_gru_mape <= goal_mape or arima_mape <= goal_mape or rf_mape <= goal_mape or xgb_mape <= goal_mape:
-        print(f"Goal MAPE of {goal_mape}% reached in iteration {iteration + 1}")
-        break
-
-    # Update ARIMA order based on performance (simple strategy, refine as needed)
-    if lstm_gru_mape < arima_mape:
-        arima_order = (arima_order[0] + 1, arima_order[1], arima_order[2])
-    else:
-        arima_order = (arima_order[0], arima_order[1], arima_order[2] + 1)
-
-    # Optional: Break the loop early if the performance stabilizes
-    if abs(lstm_gru_mape - arima_mape) < 0.1:
-        print("Performance has stabilized, stopping early.")
-        break
-
-# Final evaluation with the best models
-best_lstm_gru_model.fit(X, y, epochs=100, batch_size=32)
-final_lstm_gru_predictions = best_lstm_gru_model.predict(X[-7:])
-final_arima_predictions = arima_model.predict(start=len(global_data['New_cases'])-7, end=len(global_data['New_cases'])-1)
-final_rf_predictions = random_forest_model(X_flat[:-7], y[:-7], X_flat[-7:])
-final_xgb_predictions = xgboost_model(X_flat[:-7], y[:-7], X_flat[-7:])
-
-# Inverse transform predictions and compare
-final_lstm_gru_predictions = scaler.inverse_transform(np.array(final_lstm_gru_predictions).reshape(-1, 1)).flatten()
-final_arima_predictions = scaler.inverse_transform(np.array(final_arima_predictions).reshape(-1, 1)).flatten()
-final_rf_predictions = scaler.inverse_transform(np.array(final_rf_predictions).reshape(-1, 1)).flatten()
-final_xgb_predictions = scaler.inverse_transform(np.array(final_xgb_predictions).reshape(-1, 1)).flatten()
-
-# Apply exponential function to reverse the log transformation
-final_lstm_gru_predictions = np.expm1(final_lstm_gru_predictions)
-final_arima_predictions = np.expm1(final_arima_predictions)
-final_rf_predictions = np.expm1(final_rf_predictions)
-final_xgb_predictions = np.expm1(final_xgb_predictions)
-
-# Get the actual cases for the last 7 days
-actual_cases = np.expm1(scaler.inverse_transform(global_data['New_cases'].values[-7:].reshape(-1, 1)).flatten())
-
-# Calculate MAPE for the final predictions
-final_lstm_gru_mape = np.mean(np.abs((actual_cases - final_lstm_gru_predictions) / actual_cases)) * 100
-final_arima_mape = np.mean(np.abs((actual_cases - final_arima_predictions) / actual_cases)) * 100
-final_rf_mape = np.mean(np.abs((actual_cases - final_rf_predictions) / actual_cases)) * 100
-final_xgb_mape = np.mean(np.abs((actual_cases - final_xgb_predictions) / actual_cases)) * 100
-
-# Print the final MAPE values
-print("\nFinal MAPE values:")
-print(f"LSTM/GRU Final MAPE: {final_lstm_gru_mape}")
-print(f"ARIMA Final MAPE: {final_arima_mape}")
-print(f"Random Forest Final MAPE: {final_rf_mape}")
-print(f"XGBoost Final MAPE: {final_xgb_mape}")
-
-# Create a DataFrame to compare actual vs predicted
-comparison_df = pd.DataFrame({
-    'Date': global_data['Date_reported'].values[-7:],
-    'Actual': actual_cases,
-    'LSTM_GRU_Predicted': final_lstm_gru_predictions,
-    'ARIMA_Predicted': final_arima_predictions,
-    'Random_Forest_Predicted': final_rf_predictions,
-    'XGBoost_Predicted': final_xgb_predictions
-})
-
-# Display the comparison DataFrame
-print(comparison_df)
+if __name__ == "__main__":
+    main()
